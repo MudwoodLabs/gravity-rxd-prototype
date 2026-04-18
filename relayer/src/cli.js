@@ -23,8 +23,10 @@
  *   claim                — drive a Taker-side claim() transition
  */
 
+const fs = require('fs');
 const btc = require('./btc');
 const proof = require('./proof');
+const { buildFinalizeTx } = require('./finalize_tx');
 
 function parseArgs() {
   const argv = process.argv.slice(3); // skip: node cli.js <command>
@@ -128,6 +130,53 @@ async function cmdValidateProof() {
   process.exit(match ? 0 : 1);
 }
 
+async function cmdBuildFinalizeTx() {
+  const args = parseArgs();
+  const required = ['spv-proof', 'redeem-hex', 'funding-txid', 'funding-vout',
+                    'funding-amount', 'output-offset', 'to-address', 'fee-sats'];
+  const missing = required.filter(k => !args[k]);
+  if (missing.length) {
+    console.error(`missing required args: ${missing.join(', ')}`);
+    console.error('see --help or source for usage');
+    process.exit(2);
+  }
+
+  // spv-proof can be either a file path or literal JSON (for piping).
+  let spvProofRaw;
+  if (fs.existsSync(args['spv-proof'])) {
+    spvProofRaw = fs.readFileSync(args['spv-proof'], 'utf-8');
+  } else {
+    spvProofRaw = args['spv-proof'];
+  }
+  const spvProof = JSON.parse(spvProofRaw);
+
+  const result = buildFinalizeTx({
+    spvProof,
+    redeemHex: args['redeem-hex'],
+    fundingTxid: args['funding-txid'],
+    fundingVout: Number(args['funding-vout']),
+    fundingAmount: Number(args['funding-amount']),
+    outputOffset: Number(args['output-offset']),
+    toAddress: args['to-address'],
+    feeSats: Number(args['fee-sats']),
+  });
+
+  console.log(`=== finalize() spending tx ===`);
+  console.log(`MakerClaimed UTXO:  ${args['funding-txid']}:${args['funding-vout']} (${result.fundingAmount} sats)`);
+  console.log(`P2SH address:       ${result.p2shAddress}`);
+  console.log(`Fee:                ${result.fee} sats`);
+  console.log(`Output:             ${result.outputAmount} sats to ${args['to-address']}`);
+  console.log(`Tx size:            ${result.txSize} bytes`);
+  console.log(`ScriptSig size:     ${result.scriptSigSize} bytes`);
+  console.log(`  redeem script:    ${result.redeemScriptSize} bytes`);
+  console.log(`  witness count:    ${result.witnessCount} (headers + branch + rawTx + outputOffset)`);
+  console.log('');
+  console.log('Raw tx hex:');
+  console.log(result.txHex);
+  console.log('');
+  console.log(`Txid: ${result.txId}`);
+}
+
 async function main() {
   const cmd = process.argv[2];
   switch (cmd) {
@@ -137,9 +186,12 @@ async function main() {
     case 'validate-proof':
       await cmdValidateProof();
       break;
+    case 'build-finalize-tx':
+      await cmdBuildFinalizeTx();
+      break;
     default:
       console.error(`unknown command: ${cmd || '(none)'}`);
-      console.error('commands: fetch-spv-proof, validate-proof');
+      console.error('commands: fetch-spv-proof, validate-proof, build-finalize-tx');
       process.exit(2);
   }
 }

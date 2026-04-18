@@ -13,8 +13,6 @@ Currently implements:
 - CLI for producing finalize() witness data
 
 Not yet implemented (scope for later sessions):
-- `build-finalize-tx` — assemble the full Radiant spending tx with signed
-  unlocking script
 - `broadcast` — submit to a Radiant RPC endpoint
 - `claim` — drive the Taker-side State-1 → State-2 transition
 - Witness-stripping for segwit/taproot source txs (mitigation: require Takers
@@ -56,6 +54,55 @@ node src/cli.js fetch-spv-proof \
 Just checks whether the Merkle proof reconstructs the block's merkleRoot
 correctly. Prints PASS or FAIL. Useful for debugging format questions without
 the full witness dump.
+
+### `build-finalize-tx --spv-proof <file-or-json> --redeem-hex <hex> --funding-txid <txid> --funding-vout <n> --funding-amount <sats> --output-offset <n> --to-address <addr> --fee-sats <n>`
+
+Assembles the Radiant spending tx that exercises the `finalize()` path of
+a MakerClaimed covenant UTXO. No signing required — finalize is a
+relay-driven path where anyone with a valid SPV proof can trigger it;
+routing to the Taker is enforced by the covenant's state (takerRadiantPkh).
+
+Inputs:
+- `--spv-proof`: either a JSON file path or literal JSON string, matching
+  the output of `fetch-spv-proof`. Must have `merkle_root_matches: true`
+  and `raw_tx_hashes_to_txid: true` or build will refuse.
+- `--redeem-hex`: the full MakerClaimed locking bytecode, with both code
+  and state sections populated. The Taker reconstructs this from the
+  template + their specific state values.
+- `--funding-*`: the MakerClaimed UTXO reference (created by the Taker's
+  earlier claim() tx).
+- `--output-offset`: byte offset within the Bitcoin raw tx where the
+  P2PKH output paying Maker's `btcReceivePkh` starts. Computed off-chain
+  by the relayer (no need to parse varints on-chain).
+- `--to-address`: Radiant address to receive the photons. Must match the
+  `takerRadiantPkh` baked into the MakerClaimed UTXO's state, or the
+  covenant will reject.
+- `--fee-sats`: Radiant tx fee. Min relay is 10,000 sat/byte; a 4.8 KB
+  finalize tx needs ≥48M sats (~0.5 RXD).
+
+Output: raw tx hex ready for `sendrawtransaction`.
+
+Example (dry-run with real block 840000 SPV proof + synthetic MakerClaimed):
+```
+$ node src/cli.js build-finalize-tx \
+    --spv-proof /tmp/spv_proof.json \
+    --redeem-hex <hex from a MakerClaimed instance> \
+    --funding-txid 00...01 \
+    --funding-vout 0 \
+    --funding-amount 100000000 \
+    --output-offset 153 \
+    --to-address 1HBoQHQjPzv2jnQQEaFaotY2gCJejj6JT7 \
+    --fee-sats 60000000
+
+=== finalize() spending tx ===
+MakerClaimed UTXO:  ...:0 (100000000 sats)
+Fee:                60000000 sats
+Output:             40000000 sats to 1HBoQHQjPzv2jnQQEaFaotY2gCJejj6JT7
+Tx size:            4748 bytes
+ScriptSig size:     4661 bytes
+  redeem script:    3536 bytes
+  witness count:    9 (headers + branch + rawTx + outputOffset)
+```
 
 ## Design notes
 
