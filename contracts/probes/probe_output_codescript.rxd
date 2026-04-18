@@ -1,0 +1,14 @@
+pragma radiantscript ^0.1.0;
+
+// Probe: can we access tx.outputs[0].codeScript or similar?
+// The grammar allows tx.outputs[i].<identifier> as UnaryIntrospectionOp;
+// the question is which identifier maps to OP_CODESCRIPTBYTECODE_OUTPUT.
+
+contract ProbeOutputCodeScript(bytes32 expectedHash) {
+    return {
+        check() {
+            bytes outputCode = tx.outputs[0].codeScript;
+            require(hash256(outputCode) == expectedHash);
+        }
+    };
+}

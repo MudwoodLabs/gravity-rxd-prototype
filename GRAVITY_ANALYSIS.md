@@ -781,6 +781,79 @@ Either adds ~50-100 opcodes, well within budget.
 3. Relayer TypeScript implementation for off-chain proof construction
 4. REP draft with compile measurements and validation results
 
+---
+
+## 10i. Claim → finalize binding via code-hash commitment (2026-04-18, same session)
+
+### The gap that existed
+
+`MakerOffer.claim()` previously only verified `tx.outputs[0].value >= totalPhotonsInOutput`. It did NOT verify that the output carried a valid `MakerClaimed` covenant. A malicious Taker could route the photons straight to themselves with no SPV-verified BTC payment required. Trustless trade impossible.
+
+### The fix: stateSeparator + code-hash commitment
+
+Two-part design:
+
+**Part A — `MakerClaimed` uses `stateSeparator`** to split its locking script into:
+- **State section** (before `OP_STATESEPARATOR`): variables that vary per instance — `takerRadiantPkh`, `claimDeadline`
+- **Code section** (after `OP_STATESEPARATOR`): the immutable spending logic + Maker-set parameters (`makerPkh`, `totalPhotonsInOutput`)
+
+Result: different Takers produce `MakerClaimed` UTXOs with different states but **identical code sections**. Therefore the code section's `hash256` is invariant across instances of a given Maker's offer.
+
+**Part B — `MakerOffer` commits to that code-section hash**. The Maker precomputes `hash256(MakerClaimed.codeScript)` off-chain (via `reference/extract_code_hash.js`) and passes it as a constructor parameter `expectedClaimedCodeHash`. `claim()` then requires:
+
+```
+hash256(tx.outputs[0].codeScript) == expectedClaimedCodeHash
+```
+
+`tx.outputs[0].codeScript` compiles to `OP_CODESCRIPTBYTECODE_OUTPUT`, which returns exactly the bytes after `OP_STATESEPARATOR` in the output's locking bytecode.
+
+### Cost of the fix
+
+| Contract | Before binding | After binding | Δ |
+|---|---|---|---|
+| MakerOffer | 11 ops / 31 B | **14 ops / 48 B** | +3 ops / +17 B |
+| MakerClaimed | 21 ops / 88 B | **33 ops / 87 B** | +12 ops / -1 B |
+| **Combined cost of closing the gap** | | | **+15 ops / +16 B** |
+
+Trivial. The trustless-binding security property gained is worth vastly more than 16 bytes.
+
+### Off-chain tool: `reference/extract_code_hash.js`
+
+Takes a compiled `MakerClaimed` artifact plus concrete values for Maker's constructor params, substitutes them into the template bytecode, locates `OP_STATESEPARATOR` (0xbd), and returns `hash256(codeScript)`.
+
+Example:
+```
+node reference/extract_code_hash.js /tmp/maker_claimed.json \
+  makerPkh=aabbccddeeff00112233445566778899aabbccdd \
+  totalPhotonsInOutput=1000000
+
+# Output:
+expectedClaimedCodeHash: 4150a79536657fd60144fe220d7053fa8c7eb9ba9e5e174968fc53fa145681f6
+```
+
+This hash goes into `MakerOffer`'s constructor.
+
+### Remaining residual concern
+
+The Taker still controls the *state section* of the output (the bytes before `OP_STATESEPARATOR`). A production version should ensure the state section cannot contain opcodes that would short-circuit the code section at spend time (e.g., unconditional `OP_RETURN` or stack manipulation leaving garbage for the code to consume).
+
+The state section in our `MakerClaimed` template has two statements (`require(takerRadiantPkh.length == 20)`, `require(claimDeadline >= 0)`). These get compiled into fixed bytecode that the Taker would have to replicate exactly for the compiled output to be parseable. Because the Taker constructs the whole locking script and the code section's `hash256` is verified, the state section's bytecode is implicitly constrained by what the Maker expects will run before the code — but this isn't yet cryptographically enforced by the Maker's commitment.
+
+**Fix for production**: Maker commits to a hash of the FULL template (state + code) with placeholders only for the Taker-variable bytes at known offsets. `claim()` reconstructs the full expected locking script using the Taker's pkh and deadline, and compares that full reconstruction to `tx.outputs[0].lockingBytecode`. Costlier (~50 ops to reconstruct + compare) but fully enforced.
+
+### What `gen_maker_covenant.js` still needs
+
+The SPV-integrated full-covenant generator (`gen_maker_covenant.js`) does NOT yet use `stateSeparator` — it was written before the binding work. To make the full covenant bindable, the generator needs an update: move `takerRadiantPkh` and `claimDeadline` into the `function(...)` state params, add a trivial state-section, emit `stateSeparator;`, then the two spending paths.
+
+This is a mechanical update for a future iteration.
+
+### Files added / changed this session
+
+- `contracts/maker_offer.rxd` — updated with `expectedClaimedCodeHash` + binding check
+- `contracts/maker_claimed.rxd` — restructured with `stateSeparator`
+- `contracts/probes/probe_output_codescript.rxd` — verifies `tx.outputs[0].codeScript` compiles
+- `reference/extract_code_hash.js` — off-chain code-hash extraction tool
+
 
 
 
