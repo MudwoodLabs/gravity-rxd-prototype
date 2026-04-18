@@ -138,7 +138,17 @@ function main() {
     process.exit(1);
   }
 
-  const codeScript = fullBytes.slice(sepIdx + 1);  // bytes AFTER the separator
+  // Per Radiant-Core interpreter.cpp (OP_CODESCRIPTBYTECODE_OUTPUT impl at
+  // interpreter.cpp ~line 2337), the "code script" is bytes
+  // [stateSeparatorIndex .. end], INCLUDING the separator byte itself:
+  //   stack.emplace_back(outputScript.begin() + stateSeperatorIndex, outputScript.end());
+  // The "state script" is bytes [0 .. stateSeparatorIndex - 1] (EXCLUDING
+  // the separator — see OP_STATESCRIPTBYTECODE_UTXO impl).
+  //
+  // So codeScript starts at sepIdx, not sepIdx + 1. This is the hash that
+  // an on-chain MakerOffer's claim() check will produce via OP_HASH256 on
+  // the result of OP_CODESCRIPTBYTECODE_OUTPUT.
+  const codeScript = fullBytes.slice(sepIdx);  // bytes FROM the separator (inclusive)
   const codeHash = hash256(codeScript);
 
   console.log(`# MakerClaimed code-hash extraction`);

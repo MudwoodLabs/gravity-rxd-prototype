@@ -22,6 +22,7 @@ Every component needed for the bilateral Maker covenant has been written, compil
 | **Full Maker covenant 6×12 (flat)** | **2,490** | **3,570** | **✅ finalize() on mainnet `902daa91…48cf8` (Path B) + `5811fbb7…a8a9` (Path A)** |
 | MakerOffer with binding | 14 | 90 | ✅ cancel() on mainnet `9ab535ab…f778` |
 | **MakerOfferSimple** (weak binding) | **11** | **53** | **✅ claim() on mainnet `28795a75…6ce3` (Path A state machine)** |
+| **MakerOffer with P2SH binding** | **14** | **90** | **✅ claim() on mainnet `4e292c30…d679` + finalize() `2455ed84…c9bb` (full bound Path A)** |
 
 Full Gravity covenant fits in **~3.8 KB of locking script**, about **0.01%** of Radiant's 32 MB script limit.
 

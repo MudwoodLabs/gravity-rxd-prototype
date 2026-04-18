@@ -24,9 +24,11 @@
  */
 
 const fs = require('fs');
+const { execSync } = require('child_process');
 const btc = require('./btc');
 const proof = require('./proof');
 const { buildFinalizeTx } = require('./finalize_tx');
+const { buildClaimTx } = require('./claim_tx');
 
 function parseArgs() {
   const argv = process.argv.slice(3); // skip: node cli.js <command>
@@ -177,6 +179,91 @@ async function cmdBuildFinalizeTx() {
   console.log(`Txid: ${result.txId}`);
 }
 
+async function cmdBuildClaimTx() {
+  const args = parseArgs();
+  const required = ['offer-redeem-hex', 'offer-funding-txid', 'offer-funding-vout',
+                    'offer-funding-amount', 'claimed-redeem-hex', 'fee-sats'];
+  const missing = required.filter(k => !args[k]);
+  if (missing.length) {
+    console.error(`missing required args: ${missing.join(', ')}`);
+    process.exit(2);
+  }
+
+  // Allow --claimed-redeem-hex and --offer-redeem-hex to accept either literal
+  // hex or a file path containing hex.
+  function readHex(v) {
+    return fs.existsSync(v) ? fs.readFileSync(v, 'utf-8').trim() : v;
+  }
+
+  const result = buildClaimTx({
+    offerRedeemHex: readHex(args['offer-redeem-hex']),
+    offerFundingTxid: args['offer-funding-txid'],
+    offerFundingVout: Number(args['offer-funding-vout']),
+    offerFundingAmount: Number(args['offer-funding-amount']),
+    claimedRedeemHex: readHex(args['claimed-redeem-hex']),
+    feeSats: Number(args['fee-sats']),
+  });
+
+  console.log(`=== claim() tx ===`);
+  console.log(`Offer P2SH:     ${result.offerP2SH}`);
+  console.log(`Claimed P2SH:   ${result.claimedP2SH}`);
+  console.log(`Fee:            ${result.fee}`);
+  console.log(`Output amount:  ${result.outputAmount}`);
+  console.log(`Tx size:        ${result.txSize} bytes`);
+  console.log(`ScriptSig size: ${result.scriptSigSize} bytes`);
+  console.log('');
+  console.log('Raw tx hex:');
+  console.log(result.txHex);
+  console.log('');
+  console.log(`Txid: ${result.txId}`);
+}
+
+async function cmdBroadcast() {
+  const args = parseArgs();
+  if (!args['tx-hex']) {
+    console.error('--tx-hex required (hex string or file path)');
+    process.exit(2);
+  }
+  const method = args.method || 'ssh';  // default ssh to VPS container
+  const txHex = fs.existsSync(args['tx-hex'])
+    ? fs.readFileSync(args['tx-hex'], 'utf-8').trim()
+    : args['tx-hex'];
+
+  if (method === 'ssh') {
+    const host = args.host || 'ericadmin@89.117.20.219';
+    const container = args.container || 'radiant-mainnet';
+    const datadir = args.datadir || '/home/radiant/.radiant';
+    const cmd = `ssh ${host} "sudo docker exec ${container} radiant-cli -datadir=${datadir} sendrawtransaction ${txHex}"`;
+    try {
+      const out = execSync(cmd, { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
+      process.stdout.write(out);
+    } catch (e) {
+      console.error('broadcast failed:', e.stderr?.toString() || e.message);
+      process.exit(1);
+    }
+  } else if (method === 'rpc') {
+    // Plain JSON-RPC to a locally-reachable Radiant node. --rpc-url required.
+    if (!args['rpc-url']) { console.error('--rpc-url required for --method rpc'); process.exit(2); }
+    const body = JSON.stringify({
+      jsonrpc: '1.0', id: 'gravity-relayer', method: 'sendrawtransaction', params: [txHex],
+    });
+    const res = await fetch(args['rpc-url'], {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    });
+    const json = await res.json();
+    if (json.error) {
+      console.error('RPC error:', JSON.stringify(json.error));
+      process.exit(1);
+    }
+    console.log(json.result);
+  } else {
+    console.error(`unknown --method ${method}; use 'ssh' or 'rpc'`);
+    process.exit(2);
+  }
+}
+
 async function main() {
   const cmd = process.argv[2];
   switch (cmd) {
@@ -189,9 +276,15 @@ async function main() {
     case 'build-finalize-tx':
       await cmdBuildFinalizeTx();
       break;
+    case 'build-claim-tx':
+      await cmdBuildClaimTx();
+      break;
+    case 'broadcast':
+      await cmdBroadcast();
+      break;
     default:
       console.error(`unknown command: ${cmd || '(none)'}`);
-      console.error('commands: fetch-spv-proof, validate-proof, build-finalize-tx');
+      console.error('commands: fetch-spv-proof, validate-proof, build-finalize-tx, build-claim-tx, broadcast');
       process.exit(2);
   }
 }
