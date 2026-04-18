@@ -20,3 +20,6 @@ build/
 # validation workspace
 validation/node_modules/
 validation/*.artifact.json
+
+# relayer workspace
+relayer/node_modules/

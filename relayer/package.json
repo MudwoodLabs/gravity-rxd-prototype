@@ -1,0 +1,13 @@
+{
+  "name": "gravity-relayer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Off-chain relayer: fetches Bitcoin SPV data and assembles finalize() spending tx for the Gravity protocol covenant on Radiant.",
+  "type": "commonjs",
+  "bin": {
+    "gravity-relayer": "src/cli.js"
+  },
+  "dependencies": {
+    "@radiant-core/radiantjs": "^1.9.6"
+  }
+}
