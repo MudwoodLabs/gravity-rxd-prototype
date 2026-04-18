@@ -1,0 +1,40 @@
+pragma radiantscript ^0.1.0;
+
+// Gravity Maker covenant — State 1 (Open Offer)
+//
+// Two spending paths:
+//   cancel(): Maker reclaims the offer before anyone bonds a claim.
+//   claim(): Anyone bonds matching Photons and creates a State-2 UTXO
+//            marking themselves as the intended Taker. Only that Taker
+//            can later finalize with an SPV proof of their BTC payment.
+//
+// SIMPLIFICATION: this prototype does not yet verify that claim()'s
+// output[0] is a valid State-2 covenant (a MakerClaimed UTXO). That
+// cross-contract check requires the Maker to provide the expected
+// State-2 locking bytecode (parameterized by Taker's pkh) which adds
+// complexity. Without it, a malicious Taker could "claim" by sending
+// the photons straight to themselves instead of into State-2 custody.
+//
+// This gap is acceptable in a compile-and-measure prototype but MUST
+// be closed before any real trade. See FIXMEs below.
+
+contract MakerOffer(
+    pubkey makerPk,
+    int totalPhotonsInOutput   // photons_offered + bond (Taker matches bond)
+) {
+    return {
+        // Path A: Maker cancels the offer. Spends to whatever Maker wants.
+        cancel(sig s) {
+            require(checkSig(s, makerPk));
+        },
+
+        // Path B: Taker claims by bonding + routing to a State-2 covenant.
+        // [FIXME] Should also require:
+        //   tx.outputs[0].lockingBytecode == expected MakerClaimed bytecode
+        //   parameterized with (maker info..., takerPkh, claimDeadline)
+        // Without this, no trustless binding between claim and finalize.
+        claim() {
+            require(tx.outputs[0].value >= totalPhotonsInOutput);
+        }
+    };
+}

@@ -1,0 +1,18 @@
+pragma radiantscript ^0.1.0;
+
+// Gravity Maker covenant — minimal skeleton
+// Step 1: just the cancel path, to validate the signature-check pattern.
+//
+// Once the Maker posts a covenant on Radiant holding their offered Photons,
+// they can always spend it back to themselves before a Taker claims it.
+//
+// For now, also unconditionally spendable via `anyone()` so we can attach
+// the other paths incrementally. Each subsequent contract will add one path.
+
+contract MakerCancel(pubkey makerPk) {
+    return {
+        cancel(sig s) {
+            require(checkSig(s, makerPk));
+        }
+    };
+}

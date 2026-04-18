@@ -1,0 +1,53 @@
+pragma radiantscript ^0.1.0;
+
+// Gravity Maker covenant — State 2 (Claimed)
+//
+// Posted by the claim() path of MakerOffer after a Taker bonded matching
+// Photons. The UTXO value is (photons_offered + bond).
+//
+// Two spending paths:
+//   finalize(): Anyone submits a valid Bitcoin SPV proof that the Taker
+//               paid btcSatoshis to btcReceivePkh. UTXO routes to
+//               takerRadiantPkh. (SPV logic stubbed here; integration
+//               with verify_header + verify_merkle + verify_payment
+//               pending.)
+//   forfeit():  After claimDeadline, the bond+offered-photons route back
+//               to Maker. No signature needed; anyone can relay.
+//
+// [STUB] finalize() currently only verifies the routing output is to
+// takerRadiantPkh as P2PKH. The actual SPV proof verification needs to
+// be wired in. This skeleton measures the shape of the Radiant-side
+// path without carrying the full 2,500-op SPV cost.
+
+// [NOTE] SPV-integration version will add `btcReceivePkh` and `btcSatoshis`
+// parameters for the real finalize() proof-of-payment check. Omitted here
+// because RadiantScript treats unused parameters as errors.
+
+contract MakerClaimed(
+    bytes20 makerPkh,
+    bytes20 takerRadiantPkh,
+    int claimDeadline,             // Radiant block height
+    int totalPhotonsInOutput       // expected output[0].value
+) {
+    return {
+        // Anyone relays an SPV proof that the Taker paid BTC.
+        // [STUB] Real version plugs in verify_header chain + verify_merkle
+        // + verify_payment with (rawTx, outputOffset, branch, headers).
+        // For now: just verify the payout goes to takerRadiantPkh as P2PKH
+        // with the expected amount.
+        finalize() {
+            bytes25 takerLock = new LockingBytecodeP2PKH(takerRadiantPkh);
+            require(tx.outputs[0].lockingBytecode == takerLock);
+            require(tx.outputs[0].value >= totalPhotonsInOutput);
+        },
+
+        // Deadline passed without finalize. Anyone routes bond+offer
+        // back to Maker.
+        forfeit() {
+            require(tx.time >= claimDeadline);
+            bytes25 makerLock = new LockingBytecodeP2PKH(makerPkh);
+            require(tx.outputs[0].lockingBytecode == makerLock);
+            require(tx.outputs[0].value >= totalPhotonsInOutput);
+        }
+    };
+}

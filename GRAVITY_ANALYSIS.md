@@ -716,6 +716,71 @@ The paper's claim that Radiant's instruction set is sufficient for cross-chain S
 
 The remaining work is assembly, integration testing, and public contribution (REP + upstream bug fixes), not research or design.
 
+---
+
+## 10h. Full Maker covenant integration (2026-04-18, same session)
+
+### Individual Radiant-side pieces compiled
+
+| Contract | Purpose | Ops | Bytes |
+|---|---|---|---|
+| `maker_cancel.rxd` | Minimal cancel (Maker sig check only) | 1 | 6 |
+| `maker_offer.rxd` | State 1: cancel + claim | 11 | 31 |
+| `maker_claimed.rxd` | State 2: finalize stub + forfeit | 21 | 88 |
+
+### Full Maker covenant generator
+
+`generators/gen_maker_covenant.js` assembles a single RadiantScript contract combining N-header PoW chain + M-depth Merkle + BTC P2PKH payment + Radiant routing paths (finalize to Taker, forfeit to Maker).
+
+### Measured full-covenant scaling
+
+| N headers | M Merkle | Ops | Bytes |
+|---|---|---|---|
+| 1 | 1 | 357 | 602 |
+| 1 | 4 | 486 | 774 |
+| 1 | 12 | 1,090 | 1,490 |
+| 2 | 1 | 637 | 1,018 |
+| 2 | 4 | 766 | 1,190 |
+| 2 | 12 | 1,370 | 1,906 |
+| 6 | 1 | 1,757 | 2,682 |
+| 6 | 4 | 1,886 | 2,854 |
+| **6** | **12** | **2,490** | **3,570** |
+
+**Paper-recommended minimum (6 headers, depth-12 Merkle): 2,490 ops / 3,570 bytes.** Within 5% of the earlier projection. **0.011% of Radiant's 32 MB script limit.**
+
+### What the full covenant does (finalize path)
+
+1. Verify N Bitcoin headers each meet PoW target
+2. Verify chain linking (prevHash chains)
+3. Walk M-level Merkle branch from `hash256(rawTx)` up to `h1.merkleRoot`
+4. At `outputOffset` in rawTx, verify P2PKH output to `btcReceivePkh` with value ≥ `btcSatoshis`
+5. Route output[0] to `takerRadiantPkh` (P2PKH) with ≥ `totalPhotonsInOutput`
+
+forfeit path: `tx.time >= claimDeadline`, then route to `makerPkh`.
+
+### Security gap still open
+
+The `claim()` path in `MakerOffer` does not yet cryptographically bind the transition output to a valid `MakerClaimed` covenant parameterized for the claiming Taker. Options to close:
+- **`stateSeparator` pattern**: combine both states into one contract with shared code, variable state. `claim()` requires output's codeScriptBytecode hash match.
+- **Off-chain commitment**: Maker signs an acceptable State-2 template off-chain; `claim()` verifies the signature.
+
+Either adds ~50-100 opcodes, well within budget.
+
+### Files added this session
+
+- `contracts/maker_cancel.rxd` — 1-op cancel sanity check
+- `contracts/maker_offer.rxd` — State-1 skeleton (cancel + claim)
+- `contracts/maker_claimed.rxd` — State-2 skeleton (stub finalize + forfeit)
+- `contracts/maker_covenant_6x12.rxd` — full generated Maker covenant (6 headers, depth-12 Merkle)
+- `generators/gen_maker_covenant.js` — generator parameterized by (N, M)
+
+### Remaining work to a production covenant
+
+1. Close the claim → finalize binding (stateSeparator or pre-signed template)
+2. Bytecode-level validation: pick one covenant instance, construct real spending tx with known SPV proof, run through rxdeb or broadcast on Radiant testnet
+3. Relayer TypeScript implementation for off-chain proof construction
+4. REP draft with compile measurements and validation results
+
 
 
 
