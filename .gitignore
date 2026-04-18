@@ -16,3 +16,7 @@ build/
 .idea/
 *.swp
 *~
+
+# validation workspace
+validation/node_modules/
+validation/*.artifact.json

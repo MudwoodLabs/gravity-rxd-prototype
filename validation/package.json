@@ -1,0 +1,10 @@
+{
+  "name": "gravity-validation",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Scripts to validate Gravity covenants against Radiant mainnet by constructing real funding/spending transactions.",
+  "type": "commonjs",
+  "dependencies": {
+    "@radiant-core/radiantjs": "^1.9.6"
+  }
+}
