@@ -228,6 +228,7 @@ if (flat) {
   lines.push(`    bytes btcReceiveHash,`);
   if (includeTypeParam) lines.push(`    int btcReceiveType,`);
   lines.push(`    int btcSatoshis,`);
+  lines.push(`    bytes32 btcChainAnchor,     // hash256 of a known mainnet block; h1.prevHash must equal this`);
   lines.push(`    int claimDeadline,`);
   lines.push(`    int totalPhotonsInOutput`);
   lines.push(`) {`);
@@ -243,6 +244,7 @@ if (flat) {
   lines.push(`    bytes btcReceiveHash,`);
   if (includeTypeParam) lines.push(`    int btcReceiveType,`);
   lines.push(`    int btcSatoshis,`);
+  lines.push(`    bytes32 btcChainAnchor,     // hash256 of a known mainnet block; h1.prevHash must equal this`);
   lines.push(`    int totalPhotonsInOutput`);
   lines.push(`) function(`);
   lines.push(`    bytes20 takerRadiantPkh,`);
@@ -261,6 +263,17 @@ if (flat) {
 // finalize function signature: accepts N headers, M×33-byte branch, rawTx, outputOffset
 const headerParams = Array.from({ length: N }, (_, i) => `bytes h${i + 1}`).join(', ');
 lines.push(`        finalize(${headerParams}, bytes branch, bytes rawTx, int outputOffset) {`);
+
+// Chain-identity anchor: verify h1's prevHash matches a Maker-committed
+// hash of a known mainnet block. This is the network-identity guarantee —
+// without this check, an attacker could forge a cheap testnet chain whose
+// PoW passes verification but whose "payment" never happened on mainnet.
+lines.push(indent([
+  `// --- Chain-identity anchor: h1 must extend from a known mainnet block ---`,
+  `bytes h1Prev = h1.split(4)[1].split(32)[0];`,
+  `require(h1Prev == btcChainAnchor);`,
+  ``,
+]));
 
 // Chain of header verifications
 for (let i = 1; i <= N; i++) {
