@@ -1,0 +1,33 @@
+pragma radiantscript ^0.1.0;
+
+// Gravity Maker offer — simplified State 1 for Path A demonstration.
+//
+// Differences from maker_offer.rxd:
+//   - NO expectedClaimedCodeHash binding.
+//   - claim() only enforces output[0].value >= photonsOffered.
+//
+// This is NOT secure for production — a malicious Taker could route
+// the photons anywhere. Use only for exercising the state-machine
+// mechanics on mainnet. Production Gravity needs one of:
+//   (a) stateSeparator-based codeScript binding (to a specific
+//       MakerClaimed template whose code section is invariant across
+//       Takers)
+//   (b) Maker-signed pre-commitment to a specific MakerClaimed P2SH
+//       hash the Taker must match at claim time
+//
+// Both require further design work on RadiantScript's codeScript vs
+// stateScript semantics. Left as TODO.
+
+contract MakerOfferSimple(
+    pubkey makerPk,
+    int photonsOffered
+) {
+    return {
+        cancel(sig s) {
+            require(checkSig(s, makerPk));
+        },
+        claim() {
+            require(tx.outputs[0].value >= photonsOffered);
+        }
+    };
+}
