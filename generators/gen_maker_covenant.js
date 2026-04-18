@@ -17,8 +17,24 @@
 const N = parseInt(process.argv[2] || '2', 10);
 const M = parseInt(process.argv[3] || '4', 10);
 const flat = process.argv.includes('--flat');
+
+// Optional: restrict to a single BTC output type for a smaller script.
+//   --btc-type p2pkh | p2wpkh | p2sh | p2tr | all   (default: all)
+let btcTypeArg = 'all';
+{
+  const idx = process.argv.indexOf('--btc-type');
+  if (idx >= 0 && idx + 1 < process.argv.length) {
+    btcTypeArg = process.argv[idx + 1].toLowerCase();
+  }
+}
+const VALID_TYPES = ['all', 'p2pkh', 'p2wpkh', 'p2sh', 'p2tr'];
+if (!VALID_TYPES.includes(btcTypeArg)) {
+  console.error(`--btc-type must be one of: ${VALID_TYPES.join(', ')}`);
+  process.exit(1);
+}
+
 if (!(N >= 1 && N <= 144) || !(M >= 1 && M <= 20)) {
-  console.error(`usage: gen_maker_covenant.js <headers 1-144> <merkleDepth 1-20> [--flat]`);
+  console.error(`usage: gen_maker_covenant.js <headers 1-144> <merkleDepth 1-20> [--flat] [--btc-type p2pkh|p2wpkh|p2sh|p2tr|all]`);
   process.exit(1);
 }
 
@@ -96,20 +112,98 @@ function merkleBlock(M) {
   return lines;
 }
 
-// Payment verification.
-function paymentBlock() {
+// Payment verification — branches on btcReceiveType param:
+//   0 = P2PKH   output is 34 B (8 value + 0x19 + 76a914 + 20B hash + 88ac)
+//   1 = P2WPKH  output is 31 B (8 value + 0x16 + 0014 + 20B hash)
+//   2 = P2SH    output is 32 B (8 value + 0x17 + a914 + 20B hash + 87)
+//   3 = P2TR    output is 43 B (8 value + 0x22 + 5120 + 32B x-only pubkey)
+// btcReceiveHash holds the 20- or 32-byte pubkey/script-hash.
+//
+// When --btc-type is one of p2pkh/p2wpkh/p2sh/p2tr, only that single branch
+// is emitted (no btcReceiveType param, smaller script).
+
+function paymentBlockP2PKH() {
   return [
-    `// --- BTC payment verification ---`,
+    `// P2PKH: 34-byte output`,
     `bytes output = rawTx.split(outputOffset)[1].split(34)[0];`,
     `int value = int(output.split(8)[0]);`,
     `require(value >= btcSatoshis);`,
     `bytes scriptSection = output.split(8)[1];`,
     `bytes prefix = scriptSection.split(4)[0];`,
     `require(prefix == 0x1976a914);`,
-    `bytes pkh = scriptSection.split(4)[1].split(20)[0];`,
-    `require(pkh == btcReceivePkh);`,
+    `bytes hash = scriptSection.split(4)[1].split(20)[0];`,
+    `require(hash == btcReceiveHash);`,
     `bytes suffix = scriptSection.split(24)[1];`,
     `require(suffix == 0x88ac);`,
+  ];
+}
+function paymentBlockP2WPKH() {
+  return [
+    `// P2WPKH: 31-byte output`,
+    `bytes output = rawTx.split(outputOffset)[1].split(31)[0];`,
+    `int value = int(output.split(8)[0]);`,
+    `require(value >= btcSatoshis);`,
+    `bytes scriptSection = output.split(8)[1];`,
+    `bytes prefix = scriptSection.split(3)[0];`,
+    `require(prefix == 0x160014);`,
+    `bytes hash = scriptSection.split(3)[1];`,
+    `require(hash == btcReceiveHash);`,
+  ];
+}
+function paymentBlockP2SH() {
+  return [
+    `// P2SH: 32-byte output`,
+    `bytes output = rawTx.split(outputOffset)[1].split(32)[0];`,
+    `int value = int(output.split(8)[0]);`,
+    `require(value >= btcSatoshis);`,
+    `bytes scriptSection = output.split(8)[1];`,
+    `bytes prefix = scriptSection.split(3)[0];`,
+    `require(prefix == 0x17a914);`,
+    `bytes hash = scriptSection.split(3)[1].split(20)[0];`,
+    `require(hash == btcReceiveHash);`,
+    `bytes suffix = scriptSection.split(23)[1];`,
+    `require(suffix == 0x87);`,
+  ];
+}
+function paymentBlockP2TR() {
+  return [
+    `// P2TR: 43-byte output`,
+    `bytes output = rawTx.split(outputOffset)[1].split(43)[0];`,
+    `int value = int(output.split(8)[0]);`,
+    `require(value >= btcSatoshis);`,
+    `bytes scriptSection = output.split(8)[1];`,
+    `bytes prefix = scriptSection.split(3)[0];`,
+    `require(prefix == 0x225120);`,
+    `bytes hash = scriptSection.split(3)[1];`,
+    `require(hash == btcReceiveHash);`,
+  ];
+}
+
+function paymentBlock() {
+  if (btcTypeArg === 'p2pkh')  return [`// --- BTC payment verification (P2PKH) ---`, ...paymentBlockP2PKH()];
+  if (btcTypeArg === 'p2wpkh') return [`// --- BTC payment verification (P2WPKH) ---`, ...paymentBlockP2WPKH()];
+  if (btcTypeArg === 'p2sh')   return [`// --- BTC payment verification (P2SH) ---`, ...paymentBlockP2SH()];
+  if (btcTypeArg === 'p2tr')   return [`// --- BTC payment verification (P2TR) ---`, ...paymentBlockP2TR()];
+
+  // all: 4-way branch
+  const indent4 = (l) => '    ' + l;
+  return [
+    `// --- BTC payment verification (branches on btcReceiveType) ---`,
+    `if (btcReceiveType == 0) {`,
+    ...paymentBlockP2PKH().map(indent4),
+    `} else {`,
+    `    if (btcReceiveType == 1) {`,
+    ...paymentBlockP2WPKH().map(l => '        ' + l),
+    `    } else {`,
+    `        if (btcReceiveType == 2) {`,
+    ...paymentBlockP2SH().map(l => '            ' + l),
+    `        } else {`,
+    `            // Must be P2TR (type 3)`,
+    `            require(btcReceiveType == 3);`,
+    ...paymentBlockP2TR().map(l => '            ' + l),
+    `        }`,
+    `    }`,
+    `}`,
   ];
 }
 
@@ -120,14 +214,19 @@ lines.push(`// Gravity Maker covenant — State 2 (Claimed) with full SPV integr
 lines.push(`// Auto-generated: N=${N} headers, M=${M} Merkle depth`);
 lines.push(`// Do not edit by hand; regenerate with gen_maker_covenant.js.`);
 lines.push(``);
+// When a single btc-type is chosen, we don't need the dispatch param.
+const includeTypeParam = btcTypeArg === 'all';
+const nameSuffix = btcTypeArg === 'all' ? '' : '_' + btcTypeArg;
+
 if (flat) {
   // Flat layout: all params as constructor args. Used for direct-fund
   // scenarios where the entire covenant instance (state + code) is fully
   // determined at deploy time, with no MakerOffer binding flow.
-  lines.push(`contract MakerCovenantFlat${N}x${M}(`);
+  lines.push(`contract MakerCovenantFlat${N}x${M}${nameSuffix}(`);
   lines.push(`    bytes20 makerPkh,`);
   lines.push(`    bytes20 takerRadiantPkh,`);
-  lines.push(`    bytes20 btcReceivePkh,`);
+  lines.push(`    bytes btcReceiveHash,`);
+  if (includeTypeParam) lines.push(`    int btcReceiveType,`);
   lines.push(`    int btcSatoshis,`);
   lines.push(`    int claimDeadline,`);
   lines.push(`    int totalPhotonsInOutput`);
@@ -139,9 +238,10 @@ if (flat) {
   // (set at claim time by the Taker) go in the function() param list. The
   // generated contract's code-script hash is identical regardless of Taker
   // pkh or deadline, so MakerOffer can precommit to it.
-  lines.push(`contract MakerCovenant${N}x${M}(`);
+  lines.push(`contract MakerCovenant${N}x${M}${nameSuffix}(`);
   lines.push(`    bytes20 makerPkh,`);
-  lines.push(`    bytes20 btcReceivePkh,`);
+  lines.push(`    bytes btcReceiveHash,`);
+  if (includeTypeParam) lines.push(`    int btcReceiveType,`);
   lines.push(`    int btcSatoshis,`);
   lines.push(`    int totalPhotonsInOutput`);
   lines.push(`) function(`);

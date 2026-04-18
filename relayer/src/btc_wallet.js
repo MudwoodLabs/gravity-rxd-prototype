@@ -18,24 +18,85 @@ const ecc = require('tiny-secp256k1');
 const bitcoin = require('bitcoinjs-lib');
 
 const ECPair = ECPairFactory(ecc);
+bitcoin.initEccLib(ecc);  // required for taproot (p2tr) operations
 const NETWORK = bitcoin.networks.bitcoin;
 
 const MEMPOOL_API = process.env.MEMPOOL_API || 'https://mempool.space/api';
 
+/**
+ * Generate a fresh Bitcoin keypair and return addresses in all 4 formats
+ * supported by the multi-type Gravity covenant.
+ *
+ * Maker chooses which format they want to use as `btcReceiveHash` +
+ * `btcReceiveType` based on wallet / ecosystem preference.
+ */
 function generateKeypair() {
   const keypair = ECPair.makeRandom({ network: NETWORK });
   const pubkey = Buffer.from(keypair.publicKey);
-  const { address } = bitcoin.payments.p2pkh({ pubkey, network: NETWORK });
 
-  // RIPEMD160(SHA256(pubkey))
+  // RIPEMD160(SHA256(pubkey)) — 20 bytes. Used for P2PKH + P2WPKH.
   const sha = crypto.createHash('sha256').update(pubkey).digest();
   const pkh = crypto.createHash('ripemd160').update(sha).digest();
+
+  // P2SH-P2WPKH: the redeem script is `OP_0 <20-byte pkh>`, script-hash
+  // is RIPEMD160(SHA256(redeem)). The pattern is widely used for "segwit
+  // addresses that look like legacy 3..." addresses.
+  const p2shRedeem = Buffer.concat([Buffer.from([0x00, 0x14]), pkh]);
+  const p2shInnerSha = crypto.createHash('sha256').update(p2shRedeem).digest();
+  const p2shHash = crypto.createHash('ripemd160').update(p2shInnerSha).digest();
+
+  // P2TR: the "hash" is actually the x-only (32-byte) tweaked output pubkey.
+  // bitcoinjs-lib p2tr API requires explicit internal key + tweak derivation.
+  // For a fresh keypair we can use the pubkey's x-coordinate as internal
+  // key and apply the BIP341 "no-script-path" tweak.
+  //
+  // NOTE: tiny-secp256k1 supports xOnlyPointAddTweak. We use that here to
+  // produce a proper P2TR output key. For simplicity the test scripts can
+  // also just use a 32-byte random key as the output; the covenant only
+  // checks equality.
+  const xOnlyPubkey = pubkey.slice(1);  // remove parity byte
+  const tweakHash = crypto.createHash('sha256')
+    .update(Buffer.from('TapTweak', 'utf8')).digest();
+  const tapTweakHash = crypto.createHash('sha256').update(
+    Buffer.concat([tweakHash, tweakHash, xOnlyPubkey])
+  ).digest();
+  const tweaked = ecc.xOnlyPointAddTweak(xOnlyPubkey, tapTweakHash);
+  const p2trOutputKey = tweaked ? Buffer.from(tweaked.xOnlyPubkey) : xOnlyPubkey;
 
   return {
     privkey_wif: keypair.toWIF(),
     pubkey_hex: pubkey.toString('hex'),
+
+    // Primary fields (20-byte hash used by P2PKH and P2WPKH)
     pkh_hex: pkh.toString('hex'),
-    address,
+
+    // Per-format fields — use the one matching your chosen btcReceiveType
+    p2pkh: {
+      type: 0,
+      hash_hex: pkh.toString('hex'),
+      address: bitcoin.payments.p2pkh({ pubkey, network: NETWORK }).address,
+    },
+    p2wpkh: {
+      type: 1,
+      hash_hex: pkh.toString('hex'),
+      address: bitcoin.payments.p2wpkh({ pubkey, network: NETWORK }).address,
+    },
+    p2sh_p2wpkh: {
+      type: 2,
+      hash_hex: p2shHash.toString('hex'),
+      address: bitcoin.payments.p2sh({
+        redeem: bitcoin.payments.p2wpkh({ pubkey, network: NETWORK }),
+        network: NETWORK,
+      }).address,
+    },
+    p2tr: {
+      type: 3,
+      hash_hex: p2trOutputKey.toString('hex'),
+      address: bitcoin.payments.p2tr({
+        internalPubkey: xOnlyPubkey,
+        network: NETWORK,
+      }).address,
+    },
   };
 }
 

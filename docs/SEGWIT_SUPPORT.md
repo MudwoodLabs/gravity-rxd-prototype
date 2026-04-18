@@ -83,6 +83,57 @@ another ~30 opcodes.
 Both phases are well within the covenant size budget (current: 3,570 bytes
 of 32 MB limit = 0.011%).
 
+## Status: Phase 1 + Phase 2 DONE (2026-04-18)
+
+Both phases implemented in a single generator update. `gen_maker_covenant.js`
+now supports all four output types via:
+
+- Single-type mode: `--btc-type p2pkh | p2wpkh | p2sh | p2tr` (smaller script)
+- Multi-type mode: `--btc-type all` (runtime-dispatched via `btcReceiveType` int param)
+
+Covenant constructor changed:
+- `bytes20 btcReceivePkh` → `bytes btcReceiveHash` (variable length: 20 B for
+  P2PKH/P2WPKH/P2SH; 32 B for P2TR)
+- Added `int btcReceiveType` (only when `--btc-type all`; omitted for single-type
+  variants since the type is implicit)
+
+**Measured 6×12 flat covenant sizes:**
+
+| --btc-type | Opcodes | Bytes |
+|---|---|---|
+| p2pkh | 2,490 | 3,571 |
+| p2wpkh | 2,484 | 3,557 |
+| p2sh | 2,490 | 3,569 |
+| p2tr | 2,484 | 3,557 |
+| all (4-way) | 2,607 | 3,820 |
+
+The 4-way dispatch adds 117 ops (+4.7%) over the P2PKH-only baseline.
+
+**`btc-keygen` CLI** now emits addresses in all four formats in one shot:
+
+```json
+{
+  "privkey_wif": "...",
+  "pubkey_hex": "...",
+  "pkh_hex": "...",
+  "p2pkh":        { "type": 0, "hash_hex": "...", "address": "199Ny6..." },
+  "p2wpkh":       { "type": 1, "hash_hex": "...", "address": "bc1qt9..." },
+  "p2sh_p2wpkh":  { "type": 2, "hash_hex": "...", "address": "3Qwecs..." },
+  "p2tr":         { "type": 3, "hash_hex": "...", "address": "bc1p8e..." }
+}
+```
+
+Maker picks the format they want, uses the corresponding `type` + `hash_hex` in
+the covenant constructor, and shares the `address` with Takers off-chain.
+
+### Residual limitation
+
+Script-side is complete. One operational constraint remains: for P2TR outputs,
+`btc_wallet.js` derives the output key via the BIP341 "no-script-path" tweak.
+Makers who want taproot with script-path spending (e.g., for multisig fallback)
+would need to construct the output key manually. Not a common case for simple
+receive-only addresses.
+
 ## What DOESN'T need any changes
 
 The relayer's `btc-build-payment` and `stripWitness` utilities are
