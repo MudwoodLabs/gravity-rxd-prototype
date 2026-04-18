@@ -83,10 +83,16 @@ function powBlock(i) {
 }
 
 // Merkle branch verification — iterates over `current`.
-function merkleBlock(M) {
+// The computed root must match the merkleRoot of ANY of the N headers in
+// the chain, not just h1. This lets the Taker's payment land in any of the
+// N verified blocks, widening the practical payment window from ~5 min
+// (if h1 was hardcoded) to ~N × block_time (~1 hour for N=6, ~1 day for
+// N=144). Security is unchanged: attacker still must forge N mainnet-
+// difficulty blocks starting from the Maker's chosen anchor.
+function merkleBlock(M, N) {
   const lines = [
     `// --- Merkle branch verification (depth ${M}) ---`,
-    `// Anchor: hash of rawTx must chain up to h1's merkleRoot via branch.`,
+    `// Anchor: hash of rawTx must chain up to ONE OF h1..h${N}'s merkleRoot.`,
     `bytes32 current = hash256(rawTx);`,
   ];
   for (let i = 0; i < M; i++) {
@@ -103,12 +109,14 @@ function merkleBlock(M) {
       `}`,
     ]);
   }
-  // h1.merkleRoot is bytes[36..68] of the header.
-  lines.push(
-    `// Chain up to h1.merkleRoot`,
-    `bytes expectedRoot = h1.split(36)[1].split(32)[0];`,
-    `require(current == expectedRoot);`,
-  );
+  // Extract merkleRoot from each header (bytes [36..68]) and check current
+  // matches any one of them.
+  lines.push(`// Extract merkleRoot from each header`);
+  for (let i = 1; i <= N; i++) {
+    lines.push(`bytes root${i} = h${i}.split(36)[1].split(32)[0];`);
+  }
+  const matchClauses = Array.from({ length: N }, (_, i) => `current == root${i + 1}`).join(' || ');
+  lines.push(`require(${matchClauses});`);
   return lines;
 }
 
@@ -290,7 +298,7 @@ for (let i = 1; i <= N; i++) {
 }
 
 // Merkle proof
-lines.push(indent(merkleBlock(M)));
+lines.push(indent(merkleBlock(M, N)));
 lines.push('');
 
 // Payment check
