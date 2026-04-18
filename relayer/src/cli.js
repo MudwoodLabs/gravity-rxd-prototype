@@ -29,6 +29,7 @@ const btc = require('./btc');
 const proof = require('./proof');
 const { buildFinalizeTx } = require('./finalize_tx');
 const { buildClaimTx } = require('./claim_tx');
+const btcWallet = require('./btc_wallet');
 
 function parseArgs() {
   const argv = process.argv.slice(3); // skip: node cli.js <command>
@@ -264,6 +265,76 @@ async function cmdBroadcast() {
   }
 }
 
+async function cmdBtcKeygen() {
+  const kp = btcWallet.generateKeypair();
+  console.log(JSON.stringify(kp, null, 2));
+}
+
+async function cmdBtcGetUtxos() {
+  const args = parseArgs();
+  if (!args.address) { console.error('--address required'); process.exit(2); }
+  const utxos = await btcWallet.getUtxos(args.address);
+  console.log(JSON.stringify(utxos, null, 2));
+}
+
+async function cmdBtcBuildPayment() {
+  const args = parseArgs();
+  const required = ['privkey-wif', 'utxo-txid', 'utxo-vout', 'utxo-amount',
+                    'to-pkh', 'amount-sats', 'fee-sats'];
+  const missing = required.filter(k => !args[k]);
+  if (missing.length) {
+    console.error(`missing required args: ${missing.join(', ')}`);
+    console.error('Hint: multiple --utxo-* triples via JSON file with --utxos <file>');
+    process.exit(2);
+  }
+
+  // Support: --utxos <json-file> listing multiple UTXOs, or single via --utxo-*
+  let inputs;
+  if (args.utxos) {
+    inputs = JSON.parse(fs.readFileSync(args.utxos, 'utf-8'));
+  } else {
+    inputs = [{
+      txid: args['utxo-txid'],
+      vout: Number(args['utxo-vout']),
+      value: Number(args['utxo-amount']),
+    }];
+  }
+
+  const result = btcWallet.buildSignedPaymentTx({
+    privkeyWif: args['privkey-wif'],
+    inputs,
+    toPkhHex: args['to-pkh'],
+    amountSats: Number(args['amount-sats']),
+    feeSats: Number(args['fee-sats']),
+    changeAddress: args['change-address'],
+  });
+
+  console.log('=== BTC payment tx ===');
+  console.log(`Inputs:       ${inputs.length}`);
+  console.log(`To pkh:       ${args['to-pkh']}`);
+  console.log(`Amount:       ${args['amount-sats']} sats`);
+  console.log(`Fee:          ${result.fee} sats`);
+  console.log(`Change:       ${result.change} sats`);
+  if (result.feeSwept) console.log(`(Dust ${result.feeSwept} sats swept to fee — below 546 dust threshold)`);
+  console.log(`Tx size:      ${result.size} bytes`);
+  console.log(`Outputs:      ${result.outputCount}`);
+  console.log('');
+  console.log('Raw tx hex:');
+  console.log(result.txHex);
+  console.log('');
+  console.log(`Txid (BE): ${result.txId}`);
+}
+
+async function cmdBtcBroadcast() {
+  const args = parseArgs();
+  if (!args['tx-hex']) { console.error('--tx-hex required'); process.exit(2); }
+  const txHex = fs.existsSync(args['tx-hex'])
+    ? fs.readFileSync(args['tx-hex'], 'utf-8').trim()
+    : args['tx-hex'];
+  const txid = await btcWallet.broadcastTx(txHex);
+  console.log(txid);
+}
+
 async function main() {
   const cmd = process.argv[2];
   switch (cmd) {
@@ -282,9 +353,22 @@ async function main() {
     case 'broadcast':
       await cmdBroadcast();
       break;
+    case 'btc-keygen':
+      await cmdBtcKeygen();
+      break;
+    case 'btc-get-utxos':
+      await cmdBtcGetUtxos();
+      break;
+    case 'btc-build-payment':
+      await cmdBtcBuildPayment();
+      break;
+    case 'btc-broadcast':
+      await cmdBtcBroadcast();
+      break;
     default:
       console.error(`unknown command: ${cmd || '(none)'}`);
-      console.error('commands: fetch-spv-proof, validate-proof, build-finalize-tx, build-claim-tx, broadcast');
+      console.error('Radiant:  fetch-spv-proof, validate-proof, build-finalize-tx, build-claim-tx, broadcast');
+      console.error('Bitcoin:  btc-keygen, btc-get-utxos, btc-build-payment, btc-broadcast');
       process.exit(2);
   }
 }

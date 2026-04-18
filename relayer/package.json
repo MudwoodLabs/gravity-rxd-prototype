@@ -8,6 +8,9 @@
     "gravity-relayer": "src/cli.js"
   },
   "dependencies": {
-    "@radiant-core/radiantjs": "^1.9.6"
+    "@radiant-core/radiantjs": "^1.9.6",
+    "bitcoinjs-lib": "^7.0.1",
+    "ecpair": "^3.0.1",
+    "tiny-secp256k1": "^2.2.4"
   }
 }
