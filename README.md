@@ -6,19 +6,22 @@ This repository contains RadiantScript contracts, code generators, and Node.js r
 
 ## Status
 
-**Primitive-level engineering complete.** Every component needed for the bilateral Maker covenant has been written, compiled, measured, and algorithmically validated against real Bitcoin mainnet data:
+**Primitive-level engineering complete. First mainnet validation confirmed.**
+
+Every component needed for the bilateral Maker covenant has been written, compiled, measured, and algorithmically validated against real Bitcoin mainnet data. One component (`verify_header.rxd`) has additionally been validated on Radiant mainnet — the compiled bytecode executes correctly under live consensus.
 
 | Component | Ops | Bytes | Validation |
 |---|---|---|---|
-| Single-header PoW verify | 272 | 402 | vs Bitcoin block 840000 |
+| **Single-header PoW verify** | **272** | **402** | ✅ vs block 840000 + **Radiant mainnet tx `a0e10946…7409`** |
 | 6-header chain verify | 1,672 | 2,479 | vs blocks 840000→840001 |
 | Depth-12 Merkle branch | 763 | 924 | synthetic 4-leaf tree, all positions |
 | BTC P2PKH payment verify | 25 | 60 | synthetic legacy tx, 5 test cases |
-| **Full Maker covenant** (projected) | **~2,660** | **~3,763** | — |
+| Full Maker covenant 6×12 | 2,490 | 3,570 | compile-only |
 
 Full Gravity covenant fits in **~3.8 KB of locking script**, about **0.01%** of Radiant's 32 MB script limit.
 
 See [`GRAVITY_ANALYSIS.md`](./GRAVITY_ANALYSIS.md) for the complete analysis, measurements, and design rationale.
+See [`validation/README.md`](./validation/README.md) for how to run additional mainnet validations.
 
 ## Not yet done
 
