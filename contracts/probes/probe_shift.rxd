@@ -1,0 +1,13 @@
+pragma radiantscript ^0.1.0;
+
+// Probe: does bitwise right-shift compile in RadiantScript?
+// Grammar file suggests disabled, but v2_test.rad uses <<. Empirical test.
+
+contract ProbeShift() {
+    return {
+        check(int flags, int bitIndex, int expectedBit) {
+            int bit = (flags >> bitIndex) & 1;
+            require(bit == expectedBit);
+        }
+    };
+}

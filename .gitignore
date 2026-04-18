@@ -1,0 +1,18 @@
+node_modules/
+*.log
+.DS_Store
+dist/
+build/
+.env
+.env.local
+
+# Compiled artifacts (regenerate from source)
+*.json
+!package.json
+!*.artifact.json
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*~

@@ -1,0 +1,78 @@
+pragma radiantscript ^0.1.0;
+
+// Gravity prototype — single-header PoW verification
+// Extracts nBits from the header, expands to 256-bit target, computes hash256,
+// compares hash < target via 4-byte unsigned chunked comparison.
+//
+// Bitcoin header layout (80 bytes, little-endian):
+//   [0..4]   version
+//   [4..36]  prevHash
+//   [36..68] merkleRoot
+//   [68..72] time
+//   [72..76] nBits  (compact target: mantissa_LE[3] + exponent[1])
+//   [76..80] nonce
+//
+// Target (as BE 256-bit integer) = mantissa << (8 * (exponent - 3))
+// hash256 output is a 32-byte LE representation of the hash.
+// For comparison, both interpreted as unsigned 256-bit; reverse to BE,
+// chunk into 8 × 4 bytes, compare MSB-first.
+
+contract VerifyHeader() {
+    return {
+        verify(bytes header) {
+            // --- Extract nBits ---
+            // header.split(72)[1] = bytes [72..]  (8 bytes)
+            // .split(4)[0]        = bytes [72..76] (nBits)
+            bytes nBits = header.split(72)[1].split(4)[0];
+
+            // mantissaLE = nBits[0..3],  exponent = nBits[3]
+            bytes mantissaLE = nBits.split(3)[0];
+            int exponent = int(nBits.split(3)[1]);
+
+            // --- Build target in LE byte order ---
+            // Low (exp-3) bytes are zero, then mantissa (LE), then high (32-exp) zeros.
+            bytes target = bytes(0, exponent - 3) + mantissaLE + bytes(0, 32 - exponent);
+
+            // --- Compute header hash ---
+            bytes32 h = hash256(header);
+
+            // --- Compare hash < target, both interpreted as BE 256-bit unsigned ---
+            // Reverse to BE order so chunk[0] is MSB.
+            bytes hBE = h.reverse();
+            bytes tBE = target.reverse();
+
+            // Extract 8 chunks of 4 bytes, each reversed for BIN2NUM.
+            // 4-byte chunks always fit in positive int64 (max 0xFFFFFFFF < 2^63).
+            int h0 = int(hBE.split(4)[0].reverse());
+            int h1 = int(hBE.split(4)[1].split(4)[0].reverse());
+            int h2 = int(hBE.split(8)[1].split(4)[0].reverse());
+            int h3 = int(hBE.split(12)[1].split(4)[0].reverse());
+            int h4 = int(hBE.split(16)[1].split(4)[0].reverse());
+            int h5 = int(hBE.split(20)[1].split(4)[0].reverse());
+            int h6 = int(hBE.split(24)[1].split(4)[0].reverse());
+            int h7 = int(hBE.split(28)[1].reverse());
+
+            int t0 = int(tBE.split(4)[0].reverse());
+            int t1 = int(tBE.split(4)[1].split(4)[0].reverse());
+            int t2 = int(tBE.split(8)[1].split(4)[0].reverse());
+            int t3 = int(tBE.split(12)[1].split(4)[0].reverse());
+            int t4 = int(tBE.split(16)[1].split(4)[0].reverse());
+            int t5 = int(tBE.split(20)[1].split(4)[0].reverse());
+            int t6 = int(tBE.split(24)[1].split(4)[0].reverse());
+            int t7 = int(tBE.split(28)[1].reverse());
+
+            // hash < target, short-circuited MSB-first
+            bool less =
+                (h0 < t0) ||
+                ((h0 == t0) && (h1 < t1)) ||
+                ((h0 == t0) && (h1 == t1) && (h2 < t2)) ||
+                ((h0 == t0) && (h1 == t1) && (h2 == t2) && (h3 < t3)) ||
+                ((h0 == t0) && (h1 == t1) && (h2 == t2) && (h3 == t3) && (h4 < t4)) ||
+                ((h0 == t0) && (h1 == t1) && (h2 == t2) && (h3 == t3) && (h4 == t4) && (h5 < t5)) ||
+                ((h0 == t0) && (h1 == t1) && (h2 == t2) && (h3 == t3) && (h4 == t4) && (h5 == t5) && (h6 < t6)) ||
+                ((h0 == t0) && (h1 == t1) && (h2 == t2) && (h3 == t3) && (h4 == t4) && (h5 == t5) && (h6 == t6) && (h7 < t7));
+
+            require(less);
+        }
+    };
+}

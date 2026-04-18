@@ -1,0 +1,13 @@
+pragma radiantscript ^0.1.0;
+
+// Probe: does hash256 on a bytes value work? Does .reverse() exist?
+// Does comparison on bytes32 work?
+
+contract ProbeHash(bytes32 expectedHash) {
+    return {
+        check(bytes header) {
+            bytes32 actual = hash256(header);
+            require(actual == expectedHash);
+        }
+    };
+}

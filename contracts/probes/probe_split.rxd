@@ -1,0 +1,13 @@
+pragma radiantscript ^0.1.0;
+
+// Probe: does tuple assignment from .split() compile?
+// If yes, tests basic OP_SPLIT integration.
+
+contract ProbeSplit(bytes expected) {
+    return {
+        check(bytes80 header) {
+            bytes first = header.split(4)[0];
+            require(first == expected);
+        }
+    };
+}

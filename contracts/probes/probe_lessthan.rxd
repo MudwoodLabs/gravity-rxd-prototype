@@ -1,0 +1,46 @@
+pragma radiantscript ^0.1.0;
+
+// Probe: chunked 32-byte less-than comparison.
+// Core primitive for "hash < target" in SPV PoW verification.
+//
+// Strategy: split 32-byte values into 4x 8-byte big-endian chunks.
+// Compare most-significant chunk first. Only proceed to next if equal.
+//
+// [OPEN] 8-byte chunks interpreted as int64 signed — negative for
+// high-bit-set chunks. This is a known issue; fix in later iteration
+// by using 7-byte chunks or XORing with 0x8000... to normalize sign.
+
+contract ProbeLessThan() {
+    return {
+        check(bytes32 hash, bytes32 target) {
+            // Reverse both to get big-endian byte order (OP_HASH256 produces LE)
+            bytes32 hashBE = hash.reverse();
+
+            // Chunk hash: 4x 8 bytes, most significant first
+            int h0 = int(hashBE.split(8)[0]);
+            bytes rest1 = hashBE.split(8)[1];
+            int h1 = int(rest1.split(8)[0]);
+            bytes rest2 = rest1.split(8)[1];
+            int h2 = int(rest2.split(8)[0]);
+            int h3 = int(rest2.split(8)[1]);
+
+            // Same for target
+            int t0 = int(target.split(8)[0]);
+            bytes trest1 = target.split(8)[1];
+            int t1 = int(trest1.split(8)[0]);
+            bytes trest2 = trest1.split(8)[1];
+            int t2 = int(trest2.split(8)[0]);
+            int t3 = int(trest2.split(8)[1]);
+
+            // hash < target iff: first differing chunk, hash chunk is smaller
+            // Express as: (h0<t0) || (h0==t0 && h1<t1) || (h0==t0 && h1==t1 && h2<t2) || ...
+            bool less =
+                (h0 < t0) ||
+                ((h0 == t0) && (h1 < t1)) ||
+                ((h0 == t0) && (h1 == t1) && (h2 < t2)) ||
+                ((h0 == t0) && (h1 == t1) && (h2 == t2) && (h3 < t3));
+
+            require(less);
+        }
+    };
+}

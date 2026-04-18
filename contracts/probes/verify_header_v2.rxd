@@ -1,0 +1,12 @@
+pragma radiantscript ^0.1.0;
+
+// Gravity prototype v2 — use the `return { ... }` syntax for multi-function contracts
+// per the grammar. Stripped to minimum to test primitives one at a time.
+
+contract VerifyHeader(bytes expectedHeader) {
+    return {
+        verify(bytes header) {
+            require(header == expectedHeader);
+        }
+    };
+}

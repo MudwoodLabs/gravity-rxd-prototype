@@ -1,0 +1,21 @@
+pragma radiantscript ^0.1.0;
+
+// Probe: test the chunked comparison primitives
+// Goal: split a 32-byte hash into 4x8-byte chunks, convert to int, compare
+
+contract ProbeChunked() {
+    return {
+        check(bytes header, int expectedHighChunk) {
+            // Hash the header -> 32-byte result
+            bytes32 h = hash256(header);
+
+            // Take first 8 bytes (most significant in big-endian if we .reverse() first)
+            bytes high8 = h.reverse().split(8)[0];
+
+            // Convert 8 bytes to int
+            int highInt = int(high8);
+
+            require(highInt == expectedHighChunk);
+        }
+    };
+}

@@ -1,0 +1,96 @@
+pragma radiantscript ^0.1.0;
+
+// Gravity prototype — 2-header chain verification
+// Verifies PoW on both headers AND that header2 chains from header1.
+//
+// Chain link rule: header2.prevHash (bytes [4..36]) == hash256(header1)
+// Both are 32-byte LE values.
+
+contract VerifyChain2() {
+    return {
+        verify(bytes h1, bytes h2) {
+            // ============ PoW check: h1 ============
+            bytes n1 = h1.split(72)[1].split(4)[0];
+            bytes m1 = n1.split(3)[0];
+            int e1 = int(n1.split(3)[1]);
+            bytes t1 = bytes(0, e1 - 3) + m1 + bytes(0, 32 - e1);
+
+            bytes32 hash1 = hash256(h1);
+            bytes h1BE = hash1.reverse();
+            bytes t1BE = t1.reverse();
+
+            int h1c0 = int(h1BE.split(4)[0].reverse());
+            int h1c1 = int(h1BE.split(4)[1].split(4)[0].reverse());
+            int h1c2 = int(h1BE.split(8)[1].split(4)[0].reverse());
+            int h1c3 = int(h1BE.split(12)[1].split(4)[0].reverse());
+            int h1c4 = int(h1BE.split(16)[1].split(4)[0].reverse());
+            int h1c5 = int(h1BE.split(20)[1].split(4)[0].reverse());
+            int h1c6 = int(h1BE.split(24)[1].split(4)[0].reverse());
+            int h1c7 = int(h1BE.split(28)[1].reverse());
+
+            int t1c0 = int(t1BE.split(4)[0].reverse());
+            int t1c1 = int(t1BE.split(4)[1].split(4)[0].reverse());
+            int t1c2 = int(t1BE.split(8)[1].split(4)[0].reverse());
+            int t1c3 = int(t1BE.split(12)[1].split(4)[0].reverse());
+            int t1c4 = int(t1BE.split(16)[1].split(4)[0].reverse());
+            int t1c5 = int(t1BE.split(20)[1].split(4)[0].reverse());
+            int t1c6 = int(t1BE.split(24)[1].split(4)[0].reverse());
+            int t1c7 = int(t1BE.split(28)[1].reverse());
+
+            bool pow1 =
+                (h1c0 < t1c0) ||
+                ((h1c0 == t1c0) && (h1c1 < t1c1)) ||
+                ((h1c0 == t1c0) && (h1c1 == t1c1) && (h1c2 < t1c2)) ||
+                ((h1c0 == t1c0) && (h1c1 == t1c1) && (h1c2 == t1c2) && (h1c3 < t1c3)) ||
+                ((h1c0 == t1c0) && (h1c1 == t1c1) && (h1c2 == t1c2) && (h1c3 == t1c3) && (h1c4 < t1c4)) ||
+                ((h1c0 == t1c0) && (h1c1 == t1c1) && (h1c2 == t1c2) && (h1c3 == t1c3) && (h1c4 == t1c4) && (h1c5 < t1c5)) ||
+                ((h1c0 == t1c0) && (h1c1 == t1c1) && (h1c2 == t1c2) && (h1c3 == t1c3) && (h1c4 == t1c4) && (h1c5 == t1c5) && (h1c6 < t1c6)) ||
+                ((h1c0 == t1c0) && (h1c1 == t1c1) && (h1c2 == t1c2) && (h1c3 == t1c3) && (h1c4 == t1c4) && (h1c5 == t1c5) && (h1c6 == t1c6) && (h1c7 < t1c7));
+            require(pow1);
+
+            // ============ Chain link: h2.prevHash == hash256(h1) ============
+            // h2 bytes [4..36] = prev block hash field
+            bytes prev = h2.split(4)[1].split(32)[0];
+            require(prev == hash1);
+
+            // ============ PoW check: h2 ============
+            bytes n2 = h2.split(72)[1].split(4)[0];
+            bytes m2 = n2.split(3)[0];
+            int e2 = int(n2.split(3)[1]);
+            bytes t2 = bytes(0, e2 - 3) + m2 + bytes(0, 32 - e2);
+
+            bytes32 hash2 = hash256(h2);
+            bytes h2BE = hash2.reverse();
+            bytes t2BE = t2.reverse();
+
+            int h2c0 = int(h2BE.split(4)[0].reverse());
+            int h2c1 = int(h2BE.split(4)[1].split(4)[0].reverse());
+            int h2c2 = int(h2BE.split(8)[1].split(4)[0].reverse());
+            int h2c3 = int(h2BE.split(12)[1].split(4)[0].reverse());
+            int h2c4 = int(h2BE.split(16)[1].split(4)[0].reverse());
+            int h2c5 = int(h2BE.split(20)[1].split(4)[0].reverse());
+            int h2c6 = int(h2BE.split(24)[1].split(4)[0].reverse());
+            int h2c7 = int(h2BE.split(28)[1].reverse());
+
+            int t2c0 = int(t2BE.split(4)[0].reverse());
+            int t2c1 = int(t2BE.split(4)[1].split(4)[0].reverse());
+            int t2c2 = int(t2BE.split(8)[1].split(4)[0].reverse());
+            int t2c3 = int(t2BE.split(12)[1].split(4)[0].reverse());
+            int t2c4 = int(t2BE.split(16)[1].split(4)[0].reverse());
+            int t2c5 = int(t2BE.split(20)[1].split(4)[0].reverse());
+            int t2c6 = int(t2BE.split(24)[1].split(4)[0].reverse());
+            int t2c7 = int(t2BE.split(28)[1].reverse());
+
+            bool pow2 =
+                (h2c0 < t2c0) ||
+                ((h2c0 == t2c0) && (h2c1 < t2c1)) ||
+                ((h2c0 == t2c0) && (h2c1 == t2c1) && (h2c2 < t2c2)) ||
+                ((h2c0 == t2c0) && (h2c1 == t2c1) && (h2c2 == t2c2) && (h2c3 < t2c3)) ||
+                ((h2c0 == t2c0) && (h2c1 == t2c1) && (h2c2 == t2c2) && (h2c3 == t2c3) && (h2c4 < t2c4)) ||
+                ((h2c0 == t2c0) && (h2c1 == t2c1) && (h2c2 == t2c2) && (h2c3 == t2c3) && (h2c4 == t2c4) && (h2c5 < t2c5)) ||
+                ((h2c0 == t2c0) && (h2c1 == t2c1) && (h2c2 == t2c2) && (h2c3 == t2c3) && (h2c4 == t2c4) && (h2c5 == t2c5) && (h2c6 < t2c6)) ||
+                ((h2c0 == t2c0) && (h2c1 == t2c1) && (h2c2 == t2c2) && (h2c3 == t2c3) && (h2c4 == t2c4) && (h2c5 == t2c5) && (h2c6 == t2c6) && (h2c7 < t2c7));
+            require(pow2);
+        }
+    };
+}

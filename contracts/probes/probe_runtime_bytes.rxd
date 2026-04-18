@@ -1,0 +1,15 @@
+pragma radiantscript ^0.1.0;
+
+// Probe: does bytes(value, size) with runtime-variable size compile?
+// This is needed for nBits target expansion where the number of leading
+// zero bytes depends on the exponent extracted from the header.
+
+contract ProbeRuntimeBytes() {
+    return {
+        check(int exponent, bytes expected) {
+            // Create `exponent` zero bytes at runtime
+            bytes zeros = bytes(0, exponent);
+            require(zeros == expected);
+        }
+    };
+}

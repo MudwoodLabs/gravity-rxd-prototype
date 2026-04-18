@@ -1,0 +1,31 @@
+pragma radiantscript ^0.1.0;
+
+// Gravity prototype — single-level Merkle branch verifier
+//
+// Branch format (per level, 33 bytes):
+//   [0]    direction: 0x00 = sibling on right, 0x01 = sibling on left
+//   [1..33] sibling hash (32 bytes, in LE like hash256 output)
+//
+// Given a leaf hash and a 1-level branch, compute the merkle root
+// and compare to expected.
+
+contract VerifyMerkle1() {
+    return {
+        check(bytes32 leaf, bytes branchLevel, bytes32 expectedRoot) {
+            // branchLevel is 33 bytes: 1 direction byte + 32 sibling bytes
+            bytes dirByte = branchLevel.split(1)[0];
+            bytes sibling = branchLevel.split(1)[1];
+
+            bytes32 current = leaf;
+            if (dirByte == 0x00) {
+                // sibling on right: hash(current || sibling)
+                current = hash256(current + sibling);
+            } else {
+                // sibling on left: hash(sibling || current)
+                current = hash256(sibling + current);
+            }
+
+            require(current == expectedRoot);
+        }
+    };
+}

@@ -1,0 +1,63 @@
+pragma radiantscript ^0.1.0;
+
+// Gravity prototype — Bitcoin payment verification
+//
+// Given a Bitcoin transaction (raw legacy format) and an output index
+// (passed as `outputOffset` = byte offset where the output starts in the tx),
+// verify:
+//   1. The output's value >= requiredSatoshis
+//   2. The output's scriptPubKey is P2PKH to expectedPkh
+//
+// Design choice: the Taker / relayer computes `outputOffset` off-chain and
+// passes it as an unlocking-script argument. This avoids having to parse
+// varints and skip inputs on-chain (where it would be expensive and the
+// primitives for varint-length extraction are untested). The script-level
+// validation is: "at this exact offset, does the output look right?"
+//
+// Tx output structure (starting at outputOffset):
+//   [offset+0 .. +8)    value (8 bytes LE)
+//   [offset+8]          scriptPubKey length (varint; for P2PKH = 0x19 = 25)
+//   [offset+9 .. +10)   OP_DUP        (0x76)
+//   [offset+10]         OP_HASH160    (0xa9)
+//   [offset+11]         push length   (0x14 = 20)
+//   [offset+12 .. +32)  pkh (20 bytes)
+//   [offset+32]         OP_EQUALVERIFY (0x88)
+//   [offset+33]         OP_CHECKSIG   (0xac)
+//
+// Total output size for P2PKH: 8 + 1 + 25 = 34 bytes
+// Full scriptPubKey (25 bytes) = 0x1976a914 <20B pkh> 0x88ac
+
+contract VerifyPayment(
+    bytes20 expectedPkh,
+    int requiredSatoshis
+) {
+    return {
+        check(bytes rawTx, int outputOffset) {
+            // --- Extract the 34-byte output at outputOffset ---
+            bytes output = rawTx.split(outputOffset)[1].split(34)[0];
+
+            // --- Verify value ---
+            // First 8 bytes LE = satoshi amount
+            bytes valueLE = output.split(8)[0];
+            int value = int(valueLE);
+            require(value >= requiredSatoshis);
+
+            // --- Verify scriptPubKey structure ---
+            // Byte 8 should be 0x19 (25 = P2PKH script length)
+            // Bytes 9..34 = 0x76 0xa9 0x14 <20B pkh> 0x88 0xac
+            bytes scriptSection = output.split(8)[1];  // 26 bytes: length + 25-byte script
+
+            // Check length byte + P2PKH prefix: 0x19 0x76 0xa9 0x14
+            bytes prefix = scriptSection.split(4)[0];
+            require(prefix == 0x1976a914);
+
+            // Check pkh (20 bytes at offset 4 within scriptSection)
+            bytes pkh = scriptSection.split(4)[1].split(20)[0];
+            require(pkh == expectedPkh);
+
+            // Check suffix: 0x88ac (OP_EQUALVERIFY OP_CHECKSIG)
+            bytes suffix = scriptSection.split(24)[1];
+            require(suffix == 0x88ac);
+        }
+    };
+}
