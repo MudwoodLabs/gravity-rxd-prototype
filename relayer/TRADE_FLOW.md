@@ -135,11 +135,19 @@ node src/cli.js btc-broadcast --tx-hex <hex from previous>
 
 **Option B — Taker has an existing BTC wallet:**
 
-Just send from that wallet to Maker's BTC address. The wallet must
-produce LEGACY (non-segwit) outputs — modern wallets usually default
-to segwit. Check the tx hex: `hash256(raw_tx)` must equal the txid
-(reversed). Legacy txs start with version bytes `0100000001` (or
-similar) and NEVER have the segwit marker `0001` after version.
+Just send from that wallet to Maker's legacy P2PKH address (the one
+Maker gave you in step 1). The Taker's wallet can be any format —
+legacy, native segwit, taproot — the relayer automatically strips
+witness data before the covenant consumes the proof, so segwit/taproot
+Taker wallets work fine.
+
+The only requirement is that the PAYMENT OUTPUT is P2PKH, which is
+determined by the destination address format. Since we asked Maker to
+generate a legacy address (starts with `1`), wallets correctly produce
+a P2PKH output for it.
+
+See `docs/SEGWIT_SUPPORT.md` for details on what formats work today and
+what would require covenant changes.
 
 ### 7. Wait for 6 BTC confirmations
 

@@ -57,9 +57,25 @@ async function cmdFetchSpvProof() {
 
   const startHeight = meta.status.block_height;
   const headers = await btc.getHeaderChain(startHeight, N);
-  const rawTx = await btc.getRawTx(args.txid);
+  const rawTxOriginal = await btc.getRawTx(args.txid);
   const mp = await btc.getMerkleProof(args.txid);
   const branch = proof.buildBranch(mp.merkle, mp.pos);
+
+  // Auto-strip witness from segwit/taproot txs so that hash256(rawTx) == txid
+  // and the covenant accepts the proof. User can opt out with --no-strip to
+  // see what the original serialization would look like.
+  const doStrip = args['no-strip'] !== 'true' && args['no-strip'] !== true;
+  let rawTx = rawTxOriginal;
+  let witnessStripInfo = null;
+  if (doStrip) {
+    const stripped = btcWallet.stripWitness(rawTxOriginal);
+    rawTx = stripped.nonWitnessHex;
+    witnessStripInfo = {
+      was_segwit: stripped.wasSegwit,
+      stripped_to_size: rawTx.length / 2,
+      original_size: rawTxOriginal.length / 2,
+    };
+  }
 
   // Cross-check off-chain via the branch (starting from the known txid)
   const computedRoot = proof.computeRoot(args.txid, branch);
@@ -80,11 +96,19 @@ async function cmdFetchSpvProof() {
 
   const warnings = [];
   if (!rawTxHashesToTxid) {
+    // After auto-stripping, this should basically never fire. If it does,
+    // it means stripWitness produced something unexpected.
     warnings.push(
-      'raw_tx does NOT hash256 to txid — likely a segwit/taproot tx. ' +
-      'The on-chain covenant will reject this; production Takers must construct ' +
-      'LEGACY (non-witness) format payment txs, or the relayer must strip ' +
-      'witness data before passing raw_tx to the finalize() unlocker.'
+      'raw_tx still does NOT hash256 to txid AFTER witness-stripping pass. ' +
+      'This is unusual — the tx may be malformed or use a non-standard ' +
+      'serialization. Inspect manually.'
+    );
+  }
+  if (witnessStripInfo && witnessStripInfo.was_segwit) {
+    warnings.push(
+      `segwit/taproot tx was automatically stripped from ` +
+      `${witnessStripInfo.original_size} → ${witnessStripInfo.stripped_to_size} bytes. ` +
+      `Use --no-strip true to see the original serialization.`
     );
   }
 

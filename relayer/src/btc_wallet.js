@@ -130,10 +130,60 @@ async function broadcastTx(txHex) {
   return (await res.text()).trim();  // txid
 }
 
+/**
+ * Strip witness data from a segwit-serialized Bitcoin tx, returning the
+ * non-witness (legacy) serialization whose hash256 equals the txid.
+ *
+ * Gravity's finalize() covenant computes hash256(rawTx) to derive the
+ * Merkle leaf. For segwit/taproot txs, the full serialization includes
+ * witness data and hash256 gives the wtxid, not the txid. Stripping the
+ * marker/flag/witness produces the non-witness serialization.
+ *
+ * If the input is already a non-witness (legacy) tx, returns it unchanged.
+ *
+ * @param {string} rawTxHex  the raw tx hex (possibly segwit)
+ * @returns {{
+ *   nonWitnessHex: string,
+ *   wasSegwit: boolean,
+ *   inputCount: number,
+ *   outputCount: number
+ * }}
+ */
+function stripWitness(rawTxHex) {
+  const tx = bitcoin.Transaction.fromHex(rawTxHex);
+  const wasSegwit = tx.hasWitnesses();
+
+  // bitcoinjs-lib's Transaction has separate virtual/byteLength methods.
+  // To serialize without witness, clear the witness data and re-serialize.
+  if (!wasSegwit) {
+    return {
+      nonWitnessHex: rawTxHex,
+      wasSegwit: false,
+      inputCount: tx.ins.length,
+      outputCount: tx.outs.length,
+    };
+  }
+
+  // Clone the tx without witness data, then serialize.
+  // bitcoinjs-lib encodes the non-witness version when hasWitnesses() is false.
+  // Easiest: zero-out every input's witness array, then toHex().
+  for (const input of tx.ins) {
+    input.witness = [];
+  }
+
+  return {
+    nonWitnessHex: tx.toHex(),
+    wasSegwit: true,
+    inputCount: tx.ins.length,
+    outputCount: tx.outs.length,
+  };
+}
+
 module.exports = {
   generateKeypair,
   getUtxos,
   getRawTxHex,
   buildSignedPaymentTx,
   broadcastTx,
+  stripWitness,
 };
