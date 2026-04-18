@@ -18,7 +18,8 @@ Every component needed for the bilateral Maker covenant has been written, compil
 | **Single-level Merkle** | **32** | **38** | ✅ synthetic tree + mainnet `2d90a6bb…8127` |
 | Depth-12 Merkle branch | 763 | 924 | compile + reference |
 | **BTC P2PKH payment verify** | **25** | **60** | ✅ synthetic tx + mainnet `339866d8…819c` |
-| Full Maker covenant 6×12 | 2,490 | 3,570 | compile-only |
+| Full Maker covenant 6×12 (w/ stateSeparator) | 2,501 | 3,571 | compile + code-hash verified |
+| **MakerOffer with binding** | **14** | **90** | ✅ cancel() on mainnet `9ab535ab…f778` |
 
 Full Gravity covenant fits in **~3.8 KB of locking script**, about **0.01%** of Radiant's 32 MB script limit.
 

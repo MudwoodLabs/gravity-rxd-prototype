@@ -119,14 +119,27 @@ lines.push(`// Gravity Maker covenant — State 2 (Claimed) with full SPV integr
 lines.push(`// Auto-generated: N=${N} headers, M=${M} Merkle depth`);
 lines.push(`// Do not edit by hand; regenerate with gen_maker_covenant.js.`);
 lines.push(``);
+// State-separated layout: code-section params (set at offer time, hashed into
+// the bytecode Maker commits to) go in the contract() param list. State-section
+// params (set at claim time by the Taker) go in the function() param list.
+// The generated contract's code-script hash is identical regardless of Taker
+// pkh or deadline, so MakerOffer can precommit to it.
 lines.push(`contract MakerCovenant${N}x${M}(`);
 lines.push(`    bytes20 makerPkh,`);
-lines.push(`    bytes20 takerRadiantPkh,`);
 lines.push(`    bytes20 btcReceivePkh,`);
 lines.push(`    int btcSatoshis,`);
-lines.push(`    int claimDeadline,`);
 lines.push(`    int totalPhotonsInOutput`);
+lines.push(`) function(`);
+lines.push(`    bytes20 takerRadiantPkh,`);
+lines.push(`    int claimDeadline`);
 lines.push(`) {`);
+lines.push(`    // Grammar requires at least one statement before stateSeparator.`);
+lines.push(`    // Use trivially-true requires that reference both state params.`);
+lines.push(`    require(takerRadiantPkh.length == 20);`);
+lines.push(`    require(claimDeadline >= 0);`);
+lines.push(``);
+lines.push(`    stateSeparator;`);
+lines.push(``);
 lines.push(`    return {`);
 
 // finalize function signature: accepts N headers, M×33-byte branch, rawTx, outputOffset

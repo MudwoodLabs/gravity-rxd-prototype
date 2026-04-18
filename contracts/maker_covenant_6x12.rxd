@@ -6,12 +6,20 @@ pragma radiantscript ^0.1.0;
 
 contract MakerCovenant6x12(
     bytes20 makerPkh,
-    bytes20 takerRadiantPkh,
     bytes20 btcReceivePkh,
     int btcSatoshis,
-    int claimDeadline,
     int totalPhotonsInOutput
+) function(
+    bytes20 takerRadiantPkh,
+    int claimDeadline
 ) {
+    // Grammar requires at least one statement before stateSeparator.
+    // Use trivially-true requires that reference both state params.
+    require(takerRadiantPkh.length == 20);
+    require(claimDeadline >= 0);
+
+    stateSeparator;
+
     return {
         finalize(bytes h1, bytes h2, bytes h3, bytes h4, bytes h5, bytes h6, bytes branch, bytes rawTx, int outputOffset) {
             // --- PoW check: h1 ---

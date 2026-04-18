@@ -1245,3 +1245,77 @@ At current RXD prices, well under a penny for validating four distinct on-chain 
 - **Full Maker covenant integration test**: compile `maker_covenant_6x12.rxd` with stateSeparator, instantiate with real Maker params, fund + spend with real Bitcoin chain + Merkle proof + payment tx. Budget: ~0.45 RXD. This is the final gate.
 - **Relayer implementation**: TypeScript library that fetches Bitcoin headers, constructs Merkle proofs, assembles full SPV proofs, and signs the spending tx. Needed for real-world trading, not for proving the protocol works.
 - **REP draft**: formal Radiant Enhancement Proposal with these measured results, opcode analysis, activation plan, security bounds.
+
+---
+
+## 10l. Integration: state-separated covenant + MakerOffer binding (2026-04-18)
+
+### Generator updated for stateSeparator
+
+`gen_maker_covenant.js` now emits the state/code split. Contract-level params (code section, hashed into the bound commitment) are what Maker sets at offer time; `function()`-level params (state section) are what Taker sets at claim time. Code-script hash is invariant across different Takers.
+
+### Full covenant regenerated
+
+`maker_covenant_6x12.rxd` (generated): **2,501 ops / 3,571 bytes** (+11 ops / +1 byte vs pre-stateSeparator version). Trivial cost for binding-compatibility.
+
+### Code-hash extracted for a concrete Maker instance
+
+Using test Maker params:
+- `makerPkh = 4f4ba4693ccb038d9451b2a1e92677c2cabaab1f` (from fresh address `18EGzsQ7BXw1rzEdohcU6xsGVrWEnqEzvJ`)
+- `btcReceivePkh = aabbccddeeff00112233445566778899aabbccdd` (test value)
+- `btcSatoshis = 50000`
+- `totalPhotonsInOutput = 20000000`
+
+`reference/extract_code_hash.js` produced:
+```
+expectedClaimedCodeHash = c5625f067c1edcca5d46768651d63098da1b27c25664a6a7bc2066d2ee07f1fa
+```
+
+Code-script portion: 3,571 bytes (everything after `OP_STATESEPARATOR` in the locking bytecode).
+
+### MakerOffer instantiated with that hash
+
+Instantiated `MakerOffer` locking script: **90 bytes**. P2SH address: `3CJGXSF4KZ8ih3QNyv1ycRGgBqwSuL7fmE`.
+
+Constructor params:
+- `makerPk = 02e1e74ede30f8a6ff7f1977158b36c0abce474e6fac1db47eb7e5814bf48e50a3` (pubkey, not pkh, for sig check)
+- `totalPhotonsInOutput = 20000000`
+- `expectedClaimedCodeHash = c5625f067c1edcca5d46768651d63098da1b27c25664a6a7bc2066d2ee07f1fa`
+
+### Cancel path validated on mainnet
+
+Funded MakerOffer P2SH with 0.05 RXD (`a3c81948…cef3:0`), then exercised `cancel(sig s)` path with a signed spending tx:
+
+- **Tx `9ab535abb5c5070991765631591b7672e12fef83031cd05889d0d0051384f778`**
+- 251 bytes, 3M sats fee (~12 sat/B)
+- ScriptSig: `<72-byte sig+ALL|FORKID hashtype> <OP_0 selector> <90-byte redeem script>`
+- Accepted by mainnet consensus
+
+**Discovery this session**: initial cancel attempt failed with `mandatory-script-verify-flag-failed`. Root cause was pushing the function selector as `0x00` (1-byte push) instead of `OP_0` (empty push). SCRIPT_VERIFY_MINIMALDATA requires canonical minimal encoding — value 0 MUST be OP_0, not a 1-byte 0x00. Fix: use empty buffer in the scriptSig builder.
+
+### What the integration milestone proves
+
+Every element of the State-1 → State-2 → (finalize / forfeit / cancel) flow is now compile-validated AND the State-1 cancel is consensus-validated:
+
+1. ✅ `gen_maker_covenant.js` produces a stateSeparator-compatible full covenant
+2. ✅ `extract_code_hash.js` derives the correct code-hash for MakerOffer to commit to
+3. ✅ MakerOffer with `bytes32 expectedClaimedCodeHash` compiles and fits in 90 bytes
+4. ✅ Cancel path (Maker sig check) executes correctly under Radiant consensus
+5. ✅ SCRIPT_VERIFY_MINIMALDATA and other strict flags are enforced — the compiler + builder must produce canonically-encoded scriptSigs
+
+### Total integration-test cost
+
+- MakerOffer funding: 0.05 RXD
+- MakerOffer cancel tx: 3M sat fee
+- Output recovered: 0.02 RXD
+- Net: **~0.03 RXD** for this round
+
+### What's left before production
+
+The claim → finalize path requires real BTC SPV proof: 6 consecutive Bitcoin mainnet headers, Merkle proof for a real Bitcoin tx paying `btcReceivePkh`, full Taker tx signing with bond. This is relayer infrastructure work — not a script-level unknown. The covenant is ready; the tooling to drive it end-to-end is the last gap.
+
+### Files added / changed this session
+
+- `generators/gen_maker_covenant.js` — updated to emit stateSeparator
+- `contracts/maker_covenant_6x12.rxd` — regenerated with stateSeparator
+- `validation/build_cancel_tx.js` — new signed spending tx builder for cancel path
