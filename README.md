@@ -12,10 +12,12 @@ Every component needed for the bilateral Maker covenant has been written, compil
 
 | Component | Ops | Bytes | Validation |
 |---|---|---|---|
-| **Single-header PoW verify** | **272** | **402** | ✅ vs block 840000 + **Radiant mainnet tx `a0e10946…7409`** |
-| 6-header chain verify | 1,672 | 2,479 | vs blocks 840000→840001 |
-| Depth-12 Merkle branch | 763 | 924 | synthetic 4-leaf tree, all positions |
-| BTC P2PKH payment verify | 25 | 60 | synthetic legacy tx, 5 test cases |
+| **Single-header PoW verify** | **272** | **402** | ✅ block 840000 + mainnet `a0e10946…7409` (confirmed) |
+| **2-header chain verify** | **552** | **815** | ✅ blocks 840000→840001 + mainnet `9a8a6b2e…32173` |
+| 6-header chain verify | 1,672 | 2,479 | compile + reference |
+| **Single-level Merkle** | **32** | **38** | ✅ synthetic tree + mainnet `2d90a6bb…8127` |
+| Depth-12 Merkle branch | 763 | 924 | compile + reference |
+| **BTC P2PKH payment verify** | **25** | **60** | ✅ synthetic tx + mainnet `339866d8…819c` |
 | Full Maker covenant 6×12 | 2,490 | 3,570 | compile-only |
 
 Full Gravity covenant fits in **~3.8 KB of locking script**, about **0.01%** of Radiant's 32 MB script limit.

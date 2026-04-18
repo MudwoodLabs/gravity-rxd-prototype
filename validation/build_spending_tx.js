@@ -3,24 +3,27 @@
  * Construct a Radiant spending transaction that unlocks a covenant UTXO
  * by providing specified witness data.
  *
- * For verify_header.rxd, the witness is a single 80-byte Bitcoin header.
- * The unlocking scriptSig is: `<header_push> <redeem_script_push>`.
+ * The unlocking scriptSig is `<witness_1_push> <witness_2_push> ... <redeem_script_push>`.
  *
  * Usage:
  *   node build_spending_tx.js \
- *     --artifact validation/verify_header.artifact.json \
+ *     --artifact <path> \
  *     --funding-txid <64-hex> \
  *     --funding-vout <int> \
  *     --funding-amount <sats> \
- *     --header-hex <160-hex> \
+ *     --witnesses <hex1,hex2,...> \
  *     --to-address <radiant-address> \
  *     --fee-sats <int>
  *
- * Prints the signed raw hex (ready for `sendrawtransaction`).
+ * Legacy single-header mode (kept for backward compat with verify_header):
+ *     --header-hex <160-hex>    (same as --witnesses <hex>)
+ *
+ * Witness order matches the function parameter order in the contract.
+ * For `function verify(bytes h1, bytes h2)`, pass `--witnesses h1hex,h2hex`.
  *
  * For P2SH contracts without signature checks, no signing is needed —
- * the scriptSig is just data pushes. This covenant takes no sig; the
- * output is locked purely by successful script evaluation.
+ * the scriptSig is just data pushes. The covenant is locked purely by
+ * successful script evaluation.
  */
 
 const fs = require('fs');
@@ -34,11 +37,15 @@ function parseArgs() {
     args[k] = argv[i + 1];
   }
   const required = ['artifact', 'funding-txid', 'funding-vout', 'funding-amount',
-                    'header-hex', 'to-address', 'fee-sats'];
+                    'to-address', 'fee-sats'];
   const missing = required.filter(k => !args[k]);
   if (missing.length) {
     console.error(`missing required args: ${missing.join(', ')}`);
     console.error(`see script header for usage`);
+    process.exit(2);
+  }
+  if (!args['witnesses'] && !args['header-hex']) {
+    console.error('must provide --witnesses or --header-hex');
     process.exit(2);
   }
   return args;
@@ -57,11 +64,16 @@ function main() {
   const redeemScriptBuf = Buffer.from(redeemScriptHex, 'hex');
   const redeemScript = rxd.Script.fromBuffer(redeemScriptBuf);
 
-  const headerBuf = Buffer.from(args['header-hex'], 'hex');
-  if (headerBuf.length !== 80) {
-    console.error(`header-hex must be 80 bytes (160 hex chars), got ${headerBuf.length}`);
-    process.exit(1);
-  }
+  // Collect witness buffers from either --witnesses (comma-separated hex list)
+  // or legacy --header-hex (single 80-byte header).
+  const witnessHexList = args['witnesses']
+    ? args['witnesses'].split(',').map(s => s.trim())
+    : [args['header-hex']];
+  const witnessBufs = witnessHexList.map((hex, i) => {
+    if (!hex) throw new Error(`witness ${i} is empty`);
+    return Buffer.from(hex, 'hex');
+  });
+  console.log(`Witnesses: ${witnessBufs.length} item(s), sizes=${witnessBufs.map(b => b.length).join(',')}`);
 
   const fundingAmount = Number(args['funding-amount']);
   const fee = Number(args['fee-sats']);
@@ -72,13 +84,20 @@ function main() {
   }
 
   // Construct the unlocking scriptSig:
-  //   push <header bytes>
-  //   push <redeem script bytes>
+  //   push <witness_1> push <witness_2> ... push <redeem_script>
+  //
+  // Witnesses are pushed in declaration order, so if the contract is
+  //   function verify(bytes h1, bytes h2)
+  // then the caller passes --witnesses h1hex,h2hex and we push h1 first
+  // (lower on stack), h2 second (higher). The compiler's generated code
+  // treats the last-pushed arg as top-of-stack.
   //
   // radiantjs Script.empty().add(buffer) pushes the buffer as a data push.
-  const scriptSig = rxd.Script.empty()
-    .add(headerBuf)
-    .add(redeemScriptBuf);
+  let scriptSig = rxd.Script.empty();
+  for (const w of witnessBufs) {
+    scriptSig = scriptSig.add(w);
+  }
+  scriptSig = scriptSig.add(redeemScriptBuf);
 
   // Build the funding UTXO reference.
   const p2shAddress = rxd.Address.payingTo(redeemScript);
@@ -112,7 +131,7 @@ function main() {
   console.log('');
   console.log('ScriptSig size:');
   console.log(`  redeem script:     ${redeemScriptBuf.length} bytes`);
-  console.log(`  header witness:    ${headerBuf.length} bytes`);
+  witnessBufs.forEach((w, i) => console.log(`  witness[${i}] size:    ${w.length} bytes`));
   console.log(`  full scriptSig:    ${scriptSig.toBuffer().length} bytes`);
   console.log('');
   console.log('Raw tx hex (hand to sendrawtransaction):');
