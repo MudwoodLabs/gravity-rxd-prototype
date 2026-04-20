@@ -7,6 +7,9 @@
   "bin": {
     "gravity-relayer": "src/cli.js"
   },
+  "scripts": {
+    "test": "node test/strip_witness.test.js && node test/validators.test.js && node test/covenant_invariants.test.js"
+  },
   "dependencies": {
     "@radiant-core/radiantjs": "1.9.6",
     "bitcoinjs-lib": "7.0.1",
