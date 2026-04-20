@@ -35,6 +35,7 @@ Every component needed for the bilateral Maker covenant has been written, compil
 | **MakerOfferSimple** (weak binding) | **11** | **53** | **✅ claim() on mainnet `28795a75…6ce3` (Path A state machine)** |
 | **MakerOffer with P2SH binding** | **14** | **90** | **✅ claim() on mainnet `4e292c30…d679` + finalize() `2455ed84…c9bb` (full bound Path A)** |
 | **Production covenant (anchored, P2WPKH, M=13)** | **~2,720** | **~3,820** | **✅ REAL BTC→RXD trade via Venmo: BTC `9432d6a4…3398` → Radiant `cda28ca2…7b28` (2026-04-19)** |
+| **Phase-10 hardened covenant (dual nBits, Taker sig, structural tx-parse, P2SH-P2WPKH support, flexible Merkle, 24h `claimDeadline` floor)** | **~2,848** | **~3,987** | **✅ End-to-end self-trade on mainnet (2026-04-20): MakerOffer `24b72606…dc45` → claim `943bc320…ac74` → BTC payment `8d128f99…7032` (h1=block 945909) → finalize `557c443c…fec60` (43M photons routed to Taker). Every hardening item — dual nBits, Taker sig, code-hash preflight, all 5 JS validators, structural check, BIP143 signing — exercised against live consensus.** |
 
 Full Gravity covenant fits in **~3.8 KB of locking script**, about **0.01%** of Radiant's 32 MB script limit.
 

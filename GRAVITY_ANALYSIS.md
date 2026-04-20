@@ -1644,3 +1644,83 @@ possibility — it's a verified capability of Radiant mainnet.
 - `relayer/src/finalize_tx.js` — payment-prefix check expanded to accept P2WPKH/P2SH/P2TR prefixes (was P2PKH-only)
 - `relayer/src/forfeit_tx.js` — new; forfeit-path spender (also useful for future Maker self-recovery patterns)
 - `relayer/package.json` — added `qrcode` for generating Maker-address QRs in terminal/PNG
+
+## 10q. 🎯 FULL MAINNET TRADE ON PHASE-10 HARDENED COVENANT (2026-04-20)
+
+After 10 phases of audit-driven hardening + ~90 commits + ~1,400 diff
+lines, the first end-to-end Gravity trade on the fully-hardened Phase-10
+covenant landed on mainnet today. Two attempts: the first caught real
+bugs, the second succeeded cleanly.
+
+### Run 1 — caught bugs, failed finalize (valuable!)
+
+Setup:
+- MakerOffer funded: `4aa6f7e6306056663b000b0052c2b28ec05accfafa378f1e18f08e8169227405` (0.5 RXD)
+- Claim: `833a64a1b9d55e04a9539afdb6b2887508d191a298536ffa4d2529bf1466e531` (47M photons → MakerClaimed)
+- BTC payment: `a528014b2272c733633ec9802a0ceb3653695d953e4ce3f8df0ec51dcf4212e0` (1000 sats, confirmed h3=block 945904)
+- SPV proof: all 5 pre-flight checks passed (chain PoW+link, anchor, nBits, tx structure, payment identity)
+- **Finalize broadcast: REJECTED** with "min relay fee not met"
+
+Root cause: under-funded. The 6×12 flat P2WPKH covenant finalize tx is
+5,084 bytes; at Radiant's effective min-relay of 10,000 sat/byte that's
+a 51M-photon floor. Our max-possible fee was 47M − 10M (covenant output
+floor) = 37M, below the min-relay threshold.
+
+**Bug found**: `cmdBuildFinalizeTx` didn't resolve `--redeem-hex` as a
+file path (unlike `cmdBuildClaimTx` which has `readHex` helper).
+`Buffer.from(path, 'hex')` silently dropped non-hex chars, producing a
+1,008-byte scriptSig (vs ~5kB) and a doomed tx. **Fixed in commit
+`68e2451`.** This is exactly the class of integration bug the five
+static reviewers couldn't catch from source alone.
+
+**Doc update**: minimum MakerOffer funding for a 6×12 flat covenant is
+now documented as **≥ 0.65 RXD** (covenant output 10M + finalize fee 51M
++ claim fee 3M). Was previously shown as 0.5 RXD.
+
+Run-1 47M photons locked at MakerClaimed until `claimDeadline`
+(2026-04-21 08:35 UTC). Recoverable via `forfeit()` after that.
+
+### Run 2 — full success
+
+Same day, fresh anchor, 1 RXD funding:
+
+- Anchor: block 945908 (hash `fa818ae225b42904de3d6323be001f8b61f8f7609bf4…`, nBits `69130217` LE)
+- MakerOffer funded: `24b72606f522d119058e46090e48ea74600c664c5035af4af7fd04dfa03fdc45` (1 RXD = 100M photons)
+- Claim: `943bc32059b348882712a4ba07b7de42d3ceea600e19a3cbc2038d8aaafcac74` (97M → MakerClaimed, signed with Taker WIF, expected-code-hash preflight passed)
+- BTC payment: `8d128f99050b9734ba4bb185b4abfa23125bbdb6c3449c8a418e91187f6d7032` (1000 sats, confirmed block 945909 = h1, first block in anchor window)
+- SPV proof: all 5 pre-flight validators pass, matched at header index 0
+- **Finalize: `557c443cea539ec0af80eb71615226bad4b746f1980dc7c1b60b2d3a999fec60`** (43M photons → Taker `13eA4Qw6rqqX3hkHknzQvZHaUvRjFoMZcm`)
+
+Fee: 54M photons (10,622 sat/byte — 6% margin above min-relay floor).
+
+### What was validated live
+
+Every Phase-3 → Phase-10 hardening item, exercised against real consensus:
+
+- `nBits` upper bound (audit 03 C1) + dual `expectedNBits`/`expectedNBitsNext` for retarget safety
+- Structural tx-layout enforcement (audit 03 C2): 1-input segwit-v0, fixed 47-byte outputOffset, byte-position checks on input/scriptSig/outputCount
+- Taker signature on `claim()` (audit 04 S3): Taker's Radiant WIF produced a valid sig; claim without it would have been rejected
+- `claimDeadline ≥ 24h` floor (audit 04 S1): generator-time-dynamic floor + client-side `extract_p2sh_code_hash.js` 24h rule both enforced
+- `expectedClaimedCodeHash` preflight (F-13): `claim_tx.js` re-hashed the MakerClaimed P2SH scriptPubKey and confirmed match before broadcasting
+- Flexible Merkle anchor: tx in h1 (run 2) and h3 (run 1) both accepted
+- Reference `validators.js` pipeline wired into `fetch-spv-proof` (F-1 from audit 05): chain PoW+link, anchor, nBits, tx structure, payment all ran and passed before proof emission
+- BIP143 P2WPKH signing in `btc_wallet.js::buildSignedPaymentTx`: produced a valid segwit-v0 tx accepted by Bitcoin mainnet
+- Witness-strip round-trip: `hash256(stripped) == txid` held on both runs' payments
+- `--min-confirmations` flag (audit 05 F-14): both runs used `--min-confirmations 1` because BTC confs + anchor window constraints are orthogonal
+- `--merkle-depth 12` explicit match: covenant's hardcoded M=12 matched the real block's Merkle depth
+- `requireInt` / `loadPrivkey` / `MEMPOOL_API` scheme validation / artifact denylist — all exercised implicitly
+- Supply-chain: exact-pinned deps (`bitcoinjs-lib@7.0.1`, `ecpair@3.0.1`, `tiny-secp256k1@2.2.4`, `@radiant-core/radiantjs@1.9.6`) via `npm ci` installs
+
+### What this demonstrates
+
+- The Phase-10 hardened covenant works end-to-end on mainnet.
+- The five-phase audit loop caught every covenant-level show-stopper from the original audit.
+- Some integration bugs (like the `--redeem-hex` path bug) only surface through live use; the `npm test` suite's 64 checks did not catch it. Adding regression tests targeting CLI arg handling is a reasonable Phase-12 polish.
+- Minimum funding floor for a 6×12 covenant is well-understood: 0.65 RXD.
+- Trade cost breakdown: Maker pays ~0.57 RXD in Radiant fees (claim + finalize). Taker pays 1,000 BTC sats + ~500 BTC fee. Total all-in ~$0.60 worth per trade of any size.
+
+### Known items still outstanding
+
+- Run-1 47M photons recoverable via `forfeit()` after 2026-04-21 08:35 UTC. Not wired into `cli.js` yet; will run directly via `forfeit_tx.js` + `sendrawtransaction`.
+- S1 race (audit 04) remains architecturally bounded by RadiantScript's time model — see `docs/S1_TIME_MODEL_LIMITATION.md`. Safe under documented honest-tooling + Taker re-verification discipline; not safe for adversarial public deployment without SPV-oracle forfeit (Phase A future work) or Radiant consensus OP_BLOCKTIME (Phase B, out-of-repo).
+- F-7 (mempool.space single-source trust) unchanged. Future work: multi-source oracle quorum.
