@@ -50,30 +50,51 @@ Maker (a limitation of the current P2SH binding; see `GRAVITY_ANALYSIS.md`
 ### 3. Maker compiles the MakerClaimed covenant for this specific trade
 
 ```bash
-# Generate the covenant with trade parameters baked in
-node generators/gen_maker_covenant.js 6 12 --flat > contracts/maker_covenant_trade.rxd
+# Generate the covenant. The generator bakes a claimDeadline floor of
+# "now - 30 days" at generation time; regenerate within 30 days of deploy
+# so the floor stays reasonably current.
+#
+# Pick --btc-type to match the Maker receive address format (this example
+# uses p2wpkh; other options are p2pkh / p2sh / p2tr / all).
+node generators/gen_maker_covenant.js 6 12 --flat --btc-type p2wpkh \
+  > contracts/maker_covenant_trade.rxd
 node /path/to/RadiantScript/packages/cashc/dist/main/cashc-cli.js \
   contracts/maker_covenant_trade.rxd \
   -o validation/maker_covenant_trade.artifact.json
 
 # Compute the expected P2SH commitment for MakerOffer.
 #
-# claimDeadline MUST be a future Unix timestamp — the covenant rejects
-# values < 1735686400 (2025-01-01) so the finalize/forfeit race cannot
-# start from block 1. Recommended: now + 24 hours.
+# claimDeadline MUST be a future Unix timestamp. Recommended: now + 24h.
+# extract_p2sh_code_hash.js refuses claimDeadline < now + 24h unless
+# --i-understand-short-deadline=true is passed. Do NOT pass that flag
+# if a counter-party asked you to — see audit 04 finding S1.
+#
+# expectedNBits / expectedNBitsNext: the current 4-byte LE nBits of
+# Bitcoin's tip, and the nBits expected at the next retarget. If far from
+# a retarget (> ~1 week away), set both to the same value. Fetch via
+# `curl -s https://mempool.space/api/block/<tip hash>` and read `bits`.
 CLAIM_DEADLINE=$(( $(date +%s) + 86400 ))
 node reference/extract_p2sh_code_hash.js validation/maker_covenant_trade.artifact.json \
   makerPkh=<maker's Radiant pkh> \
   takerRadiantPkh=<taker's Radiant pkh (from step 2)> \
-  btcReceivePkh=<maker's BTC pkh (from step 1)> \
+  btcReceiveHash=<maker's BTC pkh hex (20B for p2pkh/p2wpkh/p2sh, 32B for p2tr)> \
   btcSatoshis=<agreed BTC price in sats> \
   btcChainAnchor=<hash256 of anchor-block's 80B header, LE hex> \
   expectedNBits=<current Bitcoin nBits LE, e.g. 17030dd8> \
+  expectedNBitsNext=<nBits for next retarget; same as expectedNBits if far from retarget> \
   claimDeadline=$CLAIM_DEADLINE \
   totalPhotonsInOutput=<Photons Maker is offering>
 
-# → prints expectedClaimedCodeHash (32-byte hex)
+# → prints expectedClaimedCodeHash (32-byte hex). Save it — step 4 needs it.
 ```
+
+**Taker-side independent verification (do this before claim()).** The Taker
+re-runs the exact same `extract_p2sh_code_hash.js` invocation above with
+the Maker-advertised param values. If the tool errors (e.g. short
+deadline, banned artifact contract name), refuse the offer. If it prints
+a hash, compare against the Maker-advertised `expectedClaimedCodeHash`
+and against the on-chain MakerOffer's committed value. If either differs,
+refuse.
 
 ### 4. Maker instantiates + deploys MakerOffer
 
@@ -93,8 +114,13 @@ radiant-cli sendtoaddress <MakerOffer P2SH> <photons + fee margin>
 ### 5. Taker claims (creates MakerClaimed UTXO)
 
 ```bash
-# MakerOffer.claim() now requires a Taker signature — pass the Taker's
-# WIF via --privkey-file to avoid argv exposure.
+# MakerOffer.claim() requires a Taker signature — pass the Taker's
+# WIF via --privkey-file (0600-mode file) to avoid argv exposure.
+#
+# --expected-claimed-code-hash re-hashes the provided --claimed-redeem-hex
+# and aborts if it doesn't match the 32B hash Maker committed. Strongly
+# recommended; otherwise the claim is silently doomed and Radiant fees
+# are burned for nothing.
 node src/cli.js build-claim-tx \
   --privkey-file taker-radiant-keys.json \
   --offer-redeem-hex <path to instantiated MakerOffer hex> \
@@ -102,6 +128,7 @@ node src/cli.js build-claim-tx \
   --offer-funding-vout 0 \
   --offer-funding-amount <sats in the offer UTXO> \
   --claimed-redeem-hex <path to instantiated MakerClaimed hex> \
+  --expected-claimed-code-hash <hash from step 3> \
   --fee-sats 3000000 > claim-tx.txt
 
 # Extract the raw hex and broadcast
@@ -199,35 +226,55 @@ to at deploy time. Pass `--anchor-height` (the block BEFORE h1) and
 `--anchor-hash` (the hash256 of that anchor block's 80-byte header, LE
 hex) so the relayer verifies alignment before emitting the proof.
 
+Pass every covenant parameter so `fetch-spv-proof` runs the complete
+pre-submit validator pass and exits non-zero on any mismatch. Omitting
+these leaves the relayer blind to covenant rejections you could catch
+before burning Radiant fees.
+
 ```bash
 node src/cli.js fetch-spv-proof \
   --txid <btc_payment_txid> \
   --headers 6 \
+  --merkle-depth 12 \
   --anchor-height <H-from-maker> \
   --anchor-hash <anchor-hash-from-maker> \
+  --expected-nbits <current nBits LE, e.g. 17030dd8> \
+  --expected-nbits-next <next-retarget nBits LE; same if far from retarget> \
+  --btc-receive-hash <Maker's btcReceiveHash from step 3> \
+  --btc-receive-type <p2pkh|p2wpkh|p2sh|p2tr — matching step 3's --btc-type> \
+  --btc-satoshis <btcSatoshis from step 3> \
   > spv-proof.json
 
 # Verify every invariant passes:
 jq '.merkle_root_matches, .raw_tx_hashes_to_txid, .validation' spv-proof.json
-# → merkle_root_matches: true
-# → raw_tx_hashes_to_txid: true
+# → merkle_root_matches:       true
+# → raw_tx_hashes_to_txid:      true
 # → validation.chain_pow_and_link: true
 # → validation.chain_anchor:       true
+# → validation.nbits_match:        true
+# → validation.tx_structure:       true
+# → validation.payment:            true
 ```
 
 ### 9. (No offset needed)
 
-The covenant no longer accepts a Taker-chosen outputOffset — it enforces
-a fixed 1-input segwit tx layout and hardcodes outputOffset=47. **The
-Taker MUST**:
+The covenant enforces a fixed 1-input segwit tx layout and hardcodes
+outputOffset. **The Taker MUST**:
 
-1. Use a single segwit (P2WPKH or P2TR) UTXO as the BTC input.
+1. Use a single segwit UTXO as the BTC input. Acceptable wallet formats
+   per [`docs/SEGWIT_SUPPORT.md`](../docs/SEGWIT_SUPPORT.md): P2WPKH
+   (`bc1q…`), P2TR (`bc1p…`), P2SH-P2WPKH (`3…` wrapped segwit).
 2. Place the Maker's payment as output[0].
 
 If either constraint is violated, the covenant rejects and Taker's BTC
 is gone without recovery.
 
 ### 10. Taker finalizes (collects Photons)
+
+Pass the same covenant params used in step 8 — `build-finalize-tx`
+re-runs the payment, nBits, and anchor checks on the SPV proof right
+before emitting the spending tx, so a last-minute mismatch (e.g. stale
+proof, wrong anchor) aborts before Radiant fees are paid.
 
 ```bash
 node src/cli.js build-finalize-tx \
@@ -237,6 +284,12 @@ node src/cli.js build-finalize-tx \
   --funding-vout 0 \
   --funding-amount <sats in MakerClaimed UTXO> \
   --to-address <taker Radiant address from step 2> \
+  --anchor-hash <anchor-hash-from-maker> \
+  --expected-nbits <same as step 8> \
+  --expected-nbits-next <same as step 8> \
+  --btc-receive-hash <same as step 8> \
+  --btc-receive-type <same as step 8> \
+  --btc-satoshis <same as step 8> \
   --fee-sats 48000000 > finalize-tx.txt
 
 grep -oE '^01[0-9a-f]+' finalize-tx.txt > finalize-tx.hex

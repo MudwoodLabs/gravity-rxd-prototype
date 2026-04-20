@@ -57,6 +57,19 @@ function buildFinalizeTx(opts) {
                     'covenant will reject. Strip witness data first.');
   }
 
+  // Structural check first — the covenant accepts native-segwit (scriptSig
+  // empty, output[0]@47) or P2SH-P2WPKH (23B scriptSig, output[0]@70). The
+  // dynamic outputOffset feeds the optional payment re-check below, so this
+  // must come BEFORE the payment gate.
+  const struct = validators.verifyTxStructure(spvProof.raw_tx);
+  if (!struct.pass) {
+    throw new Error(
+      `rawTx does not meet the covenant's structural constraint: ${struct.reason}. ` +
+      `Taker must use a single segwit (P2WPKH/P2TR/P2SH-P2WPKH) UTXO, and place ` +
+      `the Maker payment as output[0].`
+    );
+  }
+
   // Per-invariant pre-flight: the SPV proof JSON records validation
   // results from fetch-spv-proof, but the proof could have been generated
   // without covenant params (anchor, nBits, payment). If the caller passes
@@ -80,8 +93,6 @@ function buildFinalizeTx(opts) {
     }
   }
   if (opts.btcReceiveHash && opts.btcSatoshis !== undefined && opts.btcReceiveType) {
-    // outputOffset is dynamic based on Taker-input shape (47 for native
-    // segwit, 70 for P2SH-P2WPKH). Derive it from verifyTxStructure.
     const pay = validators.verifyPayment(
       spvProof.raw_tx, struct.outputOffset,
       opts.btcReceiveHash, opts.btcSatoshis, opts.btcReceiveType,
@@ -93,18 +104,6 @@ function buildFinalizeTx(opts) {
 
   const redeemScriptBuf = Buffer.from(redeemHex, 'hex');
   const redeemScript = rxd.Script.fromBuffer(redeemScriptBuf);
-
-  // Structural check: the covenant only accepts a 1-input segwit tx with
-  // output[0] at byte 47. Fail early here with a specific error rather than
-  // letting the covenant reject with an opaque script-verification failure.
-  const struct = validators.verifyTxStructure(spvProof.raw_tx);
-  if (!struct.pass) {
-    throw new Error(
-      `rawTx does not meet the covenant's structural constraint: ${struct.reason}. ` +
-      `Taker must use a single segwit (P2WPKH/P2TR) UTXO, and place the Maker ` +
-      `payment as output[0].`
-    );
-  }
 
   // Assemble witnesses in the covenant's declared parameter order:
   //   h1, h2, ..., hN (headers), branch, rawTx, selector=0
