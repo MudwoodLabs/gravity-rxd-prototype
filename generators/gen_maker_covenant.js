@@ -239,18 +239,13 @@ lines.push(``);
 const includeTypeParam = btcTypeArg === 'all';
 const nameSuffix = btcTypeArg === 'all' ? '' : '_' + btcTypeArg;
 
-// Compute a claimDeadline floor that's meaningfully current. RadiantScript
-// has no on-chain access to "now" at claim time (tx.time = nLockTime, which
-// the Taker controls), so we can't enforce a future-deadline dynamically.
-// Instead the generator bakes a floor into the source at generation time:
-// "must be >= (generation time - 30 days)". A Maker who regenerates the
-// covenant today gets a floor that's 30 days old at worst, so claimDeadline
-// can't be set to a value that's years in the past — which was the flaw in
-// the original static 2025-01-01 constant (audit 04 finding S1).
-//
-// Operational: Makers must regenerate the covenant at least monthly. The
-// relayer's deployment tool (extract_p2sh_code_hash.js) also enforces
-// claimDeadline >= now + 24h as a client-side guard (belt-and-suspenders).
+// Compute a claimDeadline floor that's meaningfully current. See
+// `docs/S1_TIME_MODEL_LIMITATION.md` for the full architectural story —
+// RadiantScript has no "now" primitive at claim time, so this static
+// generation-time floor is one layer of a three-layer defense (the others
+// are the client-side 24h check in `extract_p2sh_code_hash.js` and
+// mandatory Taker-side re-verification per `relayer/TRADE_FLOW.md`).
+// Regenerate the covenant at least monthly so the floor stays meaningful.
 const CLAIMDEADLINE_FLOOR = Math.floor(Date.now() / 1000) - 30 * 24 * 3600;
 const floorComment = [
   `    // claimDeadline floor, baked at generator time (${new Date(CLAIMDEADLINE_FLOOR * 1000).toISOString()}).`,

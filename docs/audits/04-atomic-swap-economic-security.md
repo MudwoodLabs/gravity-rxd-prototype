@@ -11,7 +11,7 @@ Bitcoin-side crypto, and secrets/deps are in separate reports.
 >
 > | # | Current status |
 > |---|----------------|
-> | S1 `claimDeadline` race | Mitigated at the tooling level only. `generators/gen_maker_covenant.js` bakes a floor at generation time (`now - 30d`); `reference/extract_p2sh_code_hash.js` refuses offers with `claimDeadline < now + 24h` at the client side. RadiantScript's time model has no "now" primitive at claim time, so no covenant-level dynamic check is possible. Honest Maker + honest Taker + mandated Taker-side re-verification → race is closed. Adversarial Maker handcrafting the deploy tooling → race still possible but requires the Taker to skip verification. |
+> | S1 `claimDeadline` race | Mitigated at the tooling level only. See [`docs/S1_TIME_MODEL_LIMITATION.md`](../S1_TIME_MODEL_LIMITATION.md) for the full architectural explanation. Short version: RadiantScript has no "now" primitive at claim time, so the covenant cannot dynamically enforce "claimDeadline is in the future." The generator bakes a 30d-rear floor, the client-side deploy tool refuses `claimDeadline < now + 24h`, and the Taker is instructed to independently re-verify. Honest tooling + Taker re-verification closes the race; adversarial Maker + un-verifying Taker is still vulnerable. |
 > | S3 claim() permissionless | **CLOSED** — `contracts/maker_offer.rxd` now requires `checkSig(takerSig, takerPk)` before state transition. |
 > | S4 single-Taker binding | Unchanged; architectural. |
 > | S5 reorg safety at N=6 | Unchanged. |

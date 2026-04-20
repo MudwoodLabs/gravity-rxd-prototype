@@ -3,12 +3,13 @@
 > ⚠️ **Research prototype — do not hold value in this covenant.**
 >
 > A 2026-04-19 internal security review (see [`docs/audits/`](./docs/audits/))
-> found multiple independent paths to drain any Maker UTXO for pennies of
-> attacker cost, plus a shell-injection path on the operator's machine.
-> The successful mainnet trade (`cda28ca2…7b28`) worked because Maker and
-> Taker were cooperating. In an adversarial setting the protocol is **not
-> safe** as currently committed. Fixes are in progress — see the audit
-> reports for the findings and planned remediation.
+> found multiple paths to drain any Maker UTXO. Phases 1-6 of remediation
+> (see commit history) have closed every original show-stopper, but one
+> architectural limit remains: the finalize/forfeit race (audit 04 S1)
+> can only be mitigated at the tooling level because RadiantScript has no
+> "now" primitive — see [`docs/S1_TIME_MODEL_LIMITATION.md`](./docs/S1_TIME_MODEL_LIMITATION.md).
+> Safe for cooperative-OTC trades with independent Taker-side
+> verification; not safe for adversarial public deployment as-is.
 
 A working-code prototype of the [Gravity protocol](https://github.com/Radiant-Core/Project-Gravity) — peer-to-peer cross-chain exchange using SPV proofs and covenants on the [Radiant blockchain](https://www.radiantcore.org/).
 

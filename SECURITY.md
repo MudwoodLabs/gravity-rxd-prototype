@@ -4,7 +4,17 @@
 
 This is a **research prototype**. A 2026-04-19 internal security review
 identified multiple show-stopper issues (see [`docs/audits/`](./docs/audits/)).
-Do not hold value in this covenant.
+Phases 1-6 of remediation have closed every original show-stopper.
+
+One architectural limit remains on the **S1 finalize/forfeit race**: it can
+only be mitigated at the tooling level because RadiantScript has no
+"current time" primitive at claim time. See
+[`docs/S1_TIME_MODEL_LIMITATION.md`](./docs/S1_TIME_MODEL_LIMITATION.md)
+for the full explanation — what the covenant can and cannot enforce, what
+we do off-chain instead, and what a counter-party is actually trusting.
+
+Do not hold value in this covenant without independent Taker-side
+verification as described there.
 
 ## Reporting a vulnerability
 
