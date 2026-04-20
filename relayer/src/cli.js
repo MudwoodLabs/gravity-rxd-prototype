@@ -255,7 +255,7 @@ async function cmdBroadcast() {
     : args['tx-hex'];
 
   if (method === 'ssh') {
-    const host = args.host || 'ericadmin@89.117.20.219';
+    const host = args.host || '<your-radiant-node-ssh>';
     const container = args.container || 'radiant-mainnet';
     const datadir = args.datadir || '/home/radiant/.radiant';
     const cmd = `ssh ${host} "sudo docker exec ${container} radiant-cli -datadir=${datadir} sendrawtransaction ${txHex}"`;

@@ -76,7 +76,7 @@ Any of:
 radiant-cli sendrawtransaction <rawtx hex>
 
 # Via VPS container
-ssh ericadmin@89.117.20.219 \
+ssh <your-radiant-node-ssh> \
   'sudo docker exec radiant-mainnet radiant-cli -datadir=/home/radiant/.radiant \
    sendrawtransaction <rawtx hex>'
 

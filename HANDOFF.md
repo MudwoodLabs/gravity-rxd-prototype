@@ -130,7 +130,7 @@ For the mainnet demo, fresh covenants will be deployed — these are just refere
 - `contracts/maker_covenant_flat_6x12.rxd` — flat full covenant (current test target)
 
 **FlipperHub Radiant wallet on VPS** used for all Radiant-side operations:
-- Connection: `ssh ericadmin@89.117.20.219 'sudo docker exec radiant-mainnet radiant-cli -datadir=/home/radiant/.radiant <cmd>'`
+- Connection: `ssh <your-radiant-node-ssh> 'sudo docker exec radiant-mainnet radiant-cli -datadir=/home/radiant/.radiant <cmd>'`
 - Balance as of last check: ~5,315 RXD (more than enough for any remaining tests)
 - Demo needs only ~0.5 RXD at a time
 
