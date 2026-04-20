@@ -152,26 +152,40 @@ function destScriptFor(toType, toHashHex) {
 }
 
 function buildSignedPaymentTx(opts) {
-  const { privkeyWif, inputs, toType, toHashHex, amountSats, feeSats, changeAddress } = opts;
+  const {
+    privkeyWif, inputs, toType, toHashHex, amountSats, feeSats, changeAddress,
+    // Which Taker input shape to use. 'p2wpkh' (default) → native segwit,
+    // empty scriptSig. 'p2sh-p2wpkh' → wrapped segwit, 23-byte scriptSig
+    // containing the redeem script push. Both are accepted by the covenant.
+    inputType = 'p2wpkh',
+  } = opts;
 
-  // Phase-3 covenant rejects anything other than 1-input, empty-scriptSig
-  // (ie segwit) txs. Refuse here so the Taker doesn't broadcast a tx they
-  // can't finalize against.
+  // Phase-3 covenant rejects anything other than 1-input (segwit or
+  // wrapped segwit). Refuse here so Takers don't broadcast unspendable txs.
   if (!Array.isArray(inputs) || inputs.length !== 1) {
     throw new Error(
       `exactly 1 input required (covenant structural constraint); got ${inputs?.length ?? 'n/a'}. ` +
-      `Consolidate your UTXOs into a single P2WPKH output first.`
+      `Consolidate your UTXOs into a single P2WPKH or P2SH-P2WPKH output first.`
     );
   }
   if (!toType || !toHashHex) {
-    throw new Error('toType and toHashHex required (previously --to-pkh P2PKH-only)');
+    throw new Error('toType and toHashHex required');
+  }
+  if (inputType !== 'p2wpkh' && inputType !== 'p2sh-p2wpkh') {
+    throw new Error(`inputType must be 'p2wpkh' or 'p2sh-p2wpkh'; got '${inputType}'`);
   }
 
   const input = inputs[0];
   const keypair = ECPair.fromWIF(privkeyWif, NETWORK);
   const pubkey = Buffer.from(keypair.publicKey);
+  const pkh = bitcoin.crypto.hash160(pubkey);
   const senderP2WPKH = bitcoin.payments.p2wpkh({ pubkey, network: NETWORK });
-  const senderAddr = senderP2WPKH.address;
+  const senderP2SHP2WPKH = bitcoin.payments.p2sh({
+    redeem: senderP2WPKH, network: NETWORK,
+  });
+  const senderAddr = inputType === 'p2sh-p2wpkh'
+    ? senderP2SHP2WPKH.address
+    : senderP2WPKH.address;
 
   const totalIn = input.value;
   const changeSats = totalIn - amountSats - feeSats;
@@ -182,23 +196,34 @@ function buildSignedPaymentTx(opts) {
   const tx = new bitcoin.Transaction();
   tx.version = 2;
 
-  // Single P2WPKH input — scriptSig empty, witness set after signing.
+  // Add input — scriptSig depends on inputType.
   const prevHash = Buffer.from(input.txid, 'hex').reverse();
   tx.addInput(prevHash, input.vout, 0xffffffff);
 
-  // Output 0: Maker's payment (covenant expects this exact position).
+  if (inputType === 'p2sh-p2wpkh') {
+    // P2SH-P2WPKH scriptSig is a single push of the 22-byte P2WPKH redeem
+    // script (`0x00 0x14 <20B pkh>`). The 0x16 length prefix makes the
+    // full scriptSig 23 bytes on the wire — exactly what the covenant's
+    // structural check expects at byte 41.
+    const redeem = Buffer.concat([Buffer.from([0x00, 0x14]), pkh]);
+    const scriptSig = bitcoin.script.compile([redeem]);
+    tx.setInputScript(0, scriptSig);
+  }
+  // For 'p2wpkh', scriptSig stays empty (default).
+
+  // Output 0: Maker's payment (covenant reads this at the offset
+  // determined by the input shape — 47 for p2wpkh, 70 for p2sh-p2wpkh).
   tx.addOutput(destScriptFor(toType, toHashHex), BigInt(amountSats));
 
-  // Output 1: change, if above dust. Covenant accepts outputCount up to
-  // 0xFC (252) so change is fine. Below dust: swept into fee.
+  // Output 1: change, if above dust. Below dust: swept into fee.
   if (changeSats >= 546) {
     const changeAddr = changeAddress || senderAddr;
     const changeScript = bitcoin.address.toOutputScript(changeAddr, NETWORK);
     tx.addOutput(changeScript, BigInt(changeSats));
   }
 
-  // BIP143 segwit-v0 sighash. scriptCode for a P2WPKH input is the
-  // P2PKH-equivalent locking script of the same pubkey (BIP143 §"P2WPKH").
+  // BIP143 segwit-v0 sighash. For both P2WPKH and P2SH-P2WPKH, scriptCode
+  // is the P2PKH-equivalent locking script of the same pubkey.
   const scriptCode = bitcoin.payments.p2pkh({ pubkey, network: NETWORK }).output;
   const sighashType = bitcoin.Transaction.SIGHASH_ALL;
   const sighash = tx.hashForWitnessV0(0, scriptCode, BigInt(input.value), sighashType);
@@ -215,7 +240,7 @@ function buildSignedPaymentTx(opts) {
     outputCount: tx.outs.length,
     change: changeSats >= 546 ? changeSats : 0,
     feeSwept: changeSats >= 0 && changeSats < 546 ? changeSats : 0,
-    inputType: 'p2wpkh',
+    inputType,
     outputType: toType,
     senderAddress: senderAddr,
   };

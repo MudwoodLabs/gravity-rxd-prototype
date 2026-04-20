@@ -128,18 +128,21 @@ node src/cli.js btc-keygen --out taker-btc-keys.json
 node src/cli.js btc-get-utxos --address $(jq -r .address taker-btc-keys.json)
 # → JSON with [{ txid, vout, value, status }, ...]
 
-# Build signed legacy payment to Maker's BTC pkh.
+# Build the signed P2WPKH payment. The covenant requires a 1-input,
+# P2WPKH (native segwit) Taker tx with the Maker payment at output[0] —
+# see docs/SEGWIT_SUPPORT.md for why. The --utxo-* must refer to a
+# P2WPKH (bc1q...) UTXO owned by the Taker's privkey; multi-input and
+# non-segwit inputs are rejected.
 #
-# Pass the privkey via --privkey-file so it never hits argv (where it
-# would be visible to other local users via `ps auxww` and persist in
-# shell history). The file should be mode 0600, as btc-keygen --out
-# writes it.
+# Pass the privkey via --privkey-file so it never hits argv (which is
+# visible to ps auxww / shell history). btc-keygen --out writes 0600.
 node src/cli.js btc-build-payment \
   --privkey-file taker-btc-keys.json \
-  --utxo-txid <from above> \
-  --utxo-vout <from above> \
-  --utxo-amount <from above> \
-  --to-pkh $(jq -r .pkh_hex maker-btc-keys.json) \
+  --utxo-txid <P2WPKH UTXO txid> \
+  --utxo-vout <vout> \
+  --utxo-amount <sats> \
+  --to-hash $(jq -r .pkh_hex maker-btc-keys.json) \
+  --to-type p2wpkh \
   --amount-sats <agreed BTC price> \
   --fee-sats <BTC miner fee, e.g. 500>
 
@@ -150,19 +153,37 @@ node src/cli.js btc-broadcast --tx-hex <hex from previous>
 
 **Option B — Taker has an existing BTC wallet:**
 
-Just send from that wallet to Maker's legacy P2PKH address (the one
-Maker gave you in step 1). The Taker's wallet can be any format —
-legacy, native segwit, taproot — the relayer automatically strips
-witness data before the covenant consumes the proof, so segwit/taproot
-Taker wallets work fine.
+> ⚠️ **Not every wallet works.** The covenant enforces a fixed tx
+> layout: exactly 1 input, with one of three specific input shapes, and
+> the Maker payment at output[0]. If your wallet can't produce that
+> shape, your BTC will be paid but the covenant will refuse to release
+> the Photons and there is **no refund path**.
 
-The only requirement is that the PAYMENT OUTPUT is P2PKH, which is
-determined by the destination address format. Since we asked Maker to
-generate a legacy address (starts with `1`), wallets correctly produce
-a P2PKH output for it.
+Acceptable wallet configurations:
 
-See `docs/SEGWIT_SUPPORT.md` for details on what formats work today and
-what would require covenant changes.
+- **Native segwit** (`bc1q…` send addresses). Sparrow, Electrum
+  "Standard wallet"/"p2wpkh", BlueWallet, Muun, modern bitcoin-core.
+- **Taproot** (`bc1p…` send addresses). Any Taproot-enabled wallet.
+- **Wrapped segwit** (`3…` send addresses, configured as "p2sh-segwit"
+  or "SegWit compatibility" in your wallet). Trezor default, older
+  Ledger configs, Electrum "p2sh-segwit" mode.
+- **Fund a SINGLE UTXO** of one of the above types with at least
+  `amount + fee`. If your wallet would auto-combine multiple inputs,
+  consolidate first in a separate send.
+
+Unacceptable (will destroy your BTC if used):
+
+- Legacy addresses (`1…`).
+- Multisig P2SH wallets (`3…` that are NOT p2sh-segwit — e.g. Casa,
+  Unchained, bitcoin-core "Legacy / Multi-Sig").
+- Any tx that ends up with multiple inputs. Check your wallet's tx
+  preview — if it shows ≥2 inputs, cancel and consolidate first.
+
+If you cannot guarantee the above, use Option A — the relayer tool
+produces exactly the right tx shape, including P2SH-P2WPKH via
+`--input-type p2sh-p2wpkh`.
+
+See `docs/SEGWIT_SUPPORT.md` for the full explanation.
 
 ### 7. Wait for 6 BTC confirmations
 

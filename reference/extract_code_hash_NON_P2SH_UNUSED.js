@@ -1,28 +1,32 @@
 #!/usr/bin/env node
 /**
- * Extract the `expectedClaimedCodeHash` value needed for a Maker to bind
- * their MakerOffer to a specific MakerClaimed template.
+ * ⚠️ THIS HELPER IS UNUSED FOR THE CURRENT P2SH DEPLOYMENT FORM.
+ *
+ * The repo's MakerOffer / MakerClaimed covenants are always deployed as
+ * P2SH-wrapped scripts (see HANDOFF.md). For P2SH deployments, the
+ * covenant's claim() check `hash256(tx.outputs[0].codeScript) ==
+ * expectedClaimedCodeHash` compares against the 23-byte P2SH
+ * scriptPubKey (`OP_HASH160 <20B script-hash> OP_EQUAL`), NOT the bytes
+ * after OP_STATESEPARATOR.
+ *
+ * → Use `reference/extract_p2sh_code_hash.js` for every real deployment.
+ * → This file (`extract_code_hash_NON_P2SH_UNUSED.js`) would only be
+ *   correct if the covenant were deployed as a bare stateSeparator
+ *   contract without a P2SH wrapper. That form is not used in this
+ *   prototype and its binding semantics haven't been tested on Radiant
+ *   mainnet. Running this tool against a P2SH-deployed MakerClaimed
+ *   template will produce a hash that NEVER MATCHES on-chain — the
+ *   MakerOffer will refuse to advance state, permanently locking Maker's
+ *   RXD in the offer UTXO until cancel().
+ *
+ * Original intent (kept for reference only):
  *
  * Given:
  *   - A compiled artifact.json produced by `rxdc <contract>.rxd -o out.json`
- *   - Constructor argument values for code-section params (for MakerClaimed:
- *     makerPkh and totalPhotonsInOutput)
+ *   - Constructor argument values for code-section params
  *
  * Produces:
- *   - The hex of the MakerClaimed CODE script (bytes after OP_STATESEPARATOR)
- *     with constructor args substituted
- *   - HASH256 of that code script → this is what goes into MakerOffer's
- *     `expectedClaimedCodeHash` constructor parameter
- *
- * Usage:
- *   node extract_code_hash.js <artifact.json> key=hexvalue key=intvalue ...
- *
- * Example:
- *   node extract_code_hash.js /tmp/maker_claimed.json \
- *     makerPkh=aabbccddeeff00112233445566778899aabbccdd \
- *     totalPhotonsInOutput=1000000
- *
- * The substitution keys must match the artifact's constructor param names.
+ *   - HASH256 of the code script bytes from OP_STATESEPARATOR onward.
  */
 
 const crypto = require('crypto');
@@ -137,8 +141,24 @@ function substitute(hexTemplate, params, abi) {
 
 function main() {
   const args = process.argv.slice(2);
-  if (args.length < 1) {
-    console.error('usage: extract_code_hash.js <artifact.json> key=value ...');
+  // Refuse to run without explicit opt-in. P2SH deployments MUST use
+  // extract_p2sh_code_hash.js instead; running this one by mistake
+  // permanently locks the Maker's RXD in the offer.
+  if (!args.includes('--i-understand-this-is-not-for-p2sh=true')) {
+    console.error(
+      '\nThis tool is for non-P2SH (bare stateSeparator) covenant\n' +
+      'deployments — which are NOT what this repo uses. Running it on\n' +
+      'a P2SH-deployed MakerClaimed template will lock the Maker offer.\n\n' +
+      'For every real deployment, use:\n' +
+      '  node reference/extract_p2sh_code_hash.js <artifact.json> \\\n' +
+      '       makerPkh=... totalPhotonsInOutput=... (etc.)\n\n' +
+      'If you are sure you want the stateSeparator-only code hash for\n' +
+      'research, re-run with --i-understand-this-is-not-for-p2sh=true.\n'
+    );
+    process.exit(2);
+  }
+  if (args.length < 2) {
+    console.error('usage: extract_code_hash_NON_P2SH_UNUSED.js <artifact.json> key=value ... --i-understand-this-is-not-for-p2sh=true');
     process.exit(2);
   }
   const artifactPath = args[0];

@@ -1,155 +1,107 @@
 # Segwit / Taproot support in Gravity
 
-Summary: **what works today vs what would require covenant changes.**
+This document was written in Phase-2 days when the relayer auto-stripped
+witness data and the covenant was indifferent to Taker input type. Phase 3
+changed that: to close the attacker-chosen-`outputOffset` bypass (audit 03
+finding C2), the covenant now enforces a **fixed tx layout** on the Taker
+payment. That locked down the byte offset of output[0] but narrowed the
+acceptable wallet format.
 
-## What works today (2026-04-18)
+**Read this before broadcasting any BTC payment against a post-Phase-3
+covenant.** Using an unsupported wallet will destroy your BTC — the
+covenant rejects finalize and there is no refund path.
 
-### Taker-side segwit (fully supported)
+## Taker — supported wallet formats
 
-A Taker with a segwit or taproot wallet can pay Maker today. The relayer
-automatically strips witness data from the Taker's tx before passing to
-the on-chain covenant. No covenant changes needed.
+The Taker's BTC payment must be:
 
-Relevant code: `relayer/src/btc_wallet.js::stripWitness()`, wired into
-`fetch-spv-proof` as the default behavior.
+- **Exactly 1 input**, from a UTXO controlled by the Taker's privkey.
+- **Input type**: one of
+  - **P2WPKH** (`bc1q…`) — native segwit v0. Empty scriptSig after
+    witness-strip. outputOffset = 47 bytes.
+  - **P2TR** (`bc1p…`) — taproot / segwit v1. Empty scriptSig after
+    witness-strip. outputOffset = 47 bytes.
+  - **P2SH-P2WPKH** (`3…`) — wrapped segwit. Has a fixed 23-byte
+    scriptSig containing the P2WPKH redeem script push
+    (`0x16 0x00 0x14 <20B pkh>`). outputOffset = 70 bytes.
+  The covenant branches on the scriptSig length byte and picks the
+  matching offset.
+- **Output[0] is the Maker's payment**, of whatever type the Maker
+  specified (`btcReceiveType` + `btcReceiveHash`). The Maker can accept
+  any of P2PKH / P2WPKH / P2SH / P2TR — the Maker-output type is
+  independent of the Taker-input type.
+- **Optional output[1] is change** to the Taker.
+- **More than ~252 outputs total** are rejected (multi-byte `outputCount`
+  varint).
 
-Verified against block 840000 tx `0db5c99259f61b14d6e2966afe981fd81d4ddf92a64ac8955288e77f9f85b293`:
-- Original (with witness): 329 bytes, `hash256 != txid` (would be rejected)
-- Stripped: 136 bytes, `hash256 == txid` ✓
+### Unsupported today
 
-The Taker's tx type is invisible to the covenant — only its non-witness
-serialization and P2PKH payment output matter.
+- **Legacy P2PKH (`1...`)** — scriptSig includes signature + pubkey and
+  varies in length (typically 106-108 bytes but not fixed). Requires full
+  varint parsing inside the covenant; not planned for the prototype.
+- **P2WSH / P2SH-P2WSH** — variable-length witness scripts; same issue
+  as legacy for structural parsing.
+- **Multi-input txs** — any Taker tx that draws from more than one UTXO,
+  regardless of format, is rejected. Consolidate first.
 
-### Taker's INPUT type is irrelevant
+### How to tell if your wallet works
 
-Whether the Taker spends legacy, native segwit (P2WPKH / bech32), wrapped
-segwit (P2SH-P2WPKH), or taproot (P2TR) UTXOs as inputs, the relayer's
-strip produces a non-witness serialization that the covenant accepts.
+Check the address format you generate as the input UTXO:
 
-## What requires covenant changes
-
-### Maker receiving to non-P2PKH addresses
-
-The covenant's payment verifier expects the Taker's output scriptPubKey to
-match exactly `0x1976a914 <20B pkh> 0x88ac` — the P2PKH pattern.
-
-If the Maker wants to receive to a segwit address, the Taker's output
-scriptPubKey structure differs:
-
-| Type | Pattern | Len | Example prefix |
+| Address starts with | Type | Works? | `--input-type` |
 |---|---|---|---|
-| P2PKH (legacy) — ✅ supported | `76a914 <20B> 88ac` | 25 | `1…` |
-| P2SH | `a914 <20B> 87` | 23 | `3…` |
-| P2WPKH (native segwit) | `0014 <20B>` | 22 | `bc1q…` |
-| P2WSH | `0020 <32B>` | 34 | `bc1q…` |
-| P2TR (taproot) | `5120 <32B>` | 34 | `bc1p…` |
+| `bc1q` (42 chars) | P2WPKH | ✅ yes | `p2wpkh` (default) |
+| `bc1p` (62 chars) | P2TR | ✅ yes | `p2wpkh` (same layout post-strip) |
+| `3` | P2SH-P2WPKH | ✅ yes | `p2sh-p2wpkh` |
+| `3` | other P2SH variants | ❌ no | — |
+| `1` | legacy P2PKH | ❌ no | — |
+| `bc1q` (62 chars) | P2WSH | ❌ no | — |
 
-Each new pattern needs its own covenant verification path.
+Note: a `3…` address is only P2SH-P2WPKH if your wallet advertises
+"p2sh-segwit" / "wrapped segwit" / "SegWit compatibility" mode. Other
+`3…` variants (multisig, arbitrary P2SH redeem scripts) use different
+scriptSig shapes and will not satisfy the covenant's structural check.
 
-### Estimated cost of adding P2WPKH Maker support
+Use `node relayer/src/cli.js btc-keygen --out taker-keys.json` to get
+addresses in all supported formats. Fund the appropriate address for
+your chosen `--input-type`.
 
-Adding a second payment-type branch:
+## Maker — supported receive formats
 
-- Add `btcReceiveAddressType` as a MakerCovenant constructor param (int, 0=P2PKH, 1=P2WPKH, etc.)
-- In the verify-payment section, branch on that param
-- P2WPKH branch:
-  - Extract value (8 bytes LE at `offset`)
-  - Extract script length = 22 (`0x16`)
-  - Extract prefix `0x0014`
-  - Extract pkh (20 bytes)
-  - Require prefix matches, pkh matches, total output consumed = 22 + 8 + 1 = 31 bytes
+The Maker can choose any of the four output types for their
+`btcReceiveType`. All are handled by the covenant's payment-verification
+branch when the generator runs with `--btc-type all`, or the single-type
+variant when built with `--btc-type p2wpkh` (etc.).
 
-Estimated: +~30 opcodes. Trivial relative to the 2,490-op covenant.
-
-### Estimated cost of covering all four types
-
-- 4 branches × ~30 ops per branch = +~120 ops
-- Plus dispatch: 4-way switch based on btcReceiveAddressType = +~15 ops
-- Total: +~135 ops, a ~5% increase
-
-Fully practical.
-
-## Recommendation
-
-Implement in two phases:
-
-**Phase 1** (now): Add P2WPKH Maker support. This is the format most modern
-BTC wallets default to for receiving. ~30 opcode change to the covenant
-generator.
-
-**Phase 2** (later): Add P2SH and P2TR paths if demand exists. Each is
-another ~30 opcodes.
-
-Both phases are well within the covenant size budget (current: 3,570 bytes
-of 32 MB limit = 0.011%).
-
-## Status: Phase 1 + Phase 2 DONE (2026-04-18)
-
-Both phases implemented in a single generator update. `gen_maker_covenant.js`
-now supports all four output types via:
-
-- Single-type mode: `--btc-type p2pkh | p2wpkh | p2sh | p2tr` (smaller script)
-- Multi-type mode: `--btc-type all` (runtime-dispatched via `btcReceiveType` int param)
-
-Covenant constructor changed:
-- `bytes20 btcReceivePkh` → `bytes btcReceiveHash` (variable length: 20 B for
-  P2PKH/P2WPKH/P2SH; 32 B for P2TR)
-- Added `int btcReceiveType` (only when `--btc-type all`; omitted for single-type
-  variants since the type is implicit)
-
-**Measured 6×12 flat covenant sizes:**
-
-| --btc-type | Opcodes | Bytes |
+| Maker receive type | `--btc-type` arg | Taker pays to |
 |---|---|---|
-| p2pkh | 2,490 | 3,571 |
-| p2wpkh | 2,484 | 3,557 |
-| p2sh | 2,490 | 3,569 |
-| p2tr | 2,484 | 3,557 |
-| all (4-way) | 2,607 | 3,820 |
+| P2PKH | `p2pkh` | `1...` |
+| P2WPKH | `p2wpkh` | `bc1q...` (42 chars) |
+| P2SH | `p2sh` | `3...` |
+| P2TR | `p2tr` | `bc1p...` |
+| any | `all` | per `btcReceiveType` int |
 
-The 4-way dispatch adds 117 ops (+4.7%) over the P2PKH-only baseline.
+Single-type variants produce a slightly smaller covenant (~6 fewer
+opcodes); use multi-type only if you want to support multiple Makers on
+one template.
 
-**`btc-keygen` CLI** now emits addresses in all four formats in one shot:
+## Witness-stripping stays part of the pipeline
 
-```json
-{
-  "privkey_wif": "...",
-  "pubkey_hex": "...",
-  "pkh_hex": "...",
-  "p2pkh":        { "type": 0, "hash_hex": "...", "address": "199Ny6..." },
-  "p2wpkh":       { "type": 1, "hash_hex": "...", "address": "bc1qt9..." },
-  "p2sh_p2wpkh":  { "type": 2, "hash_hex": "...", "address": "3Qwecs..." },
-  "p2tr":         { "type": 3, "hash_hex": "...", "address": "bc1p8e..." }
-}
-```
+The covenant computes `hash256(rawTx) == txid` to derive the Merkle leaf.
+For segwit txs, the full wire serialization includes marker/flag/witness
+bytes, and `hash256` of that yields `wtxid`, not `txid`. The relayer's
+`fetch-spv-proof` auto-strips witness data before emitting the proof so
+that `hash256(stripped) == txid` holds.
 
-Maker picks the format they want, uses the corresponding `type` + `hash_hex` in
-the covenant constructor, and shares the `address` with Takers off-chain.
+Covenant-side: it only ever sees the stripped serialization.
 
-### Residual limitation
+## Why the constraint exists
 
-Script-side is complete. One operational constraint remains: for P2TR outputs,
-`btc_wallet.js` derives the output key via the BIP341 "no-script-path" tweak.
-Makers who want taproot with script-path spending (e.g., for multisig fallback)
-would need to construct the output key manually. Not a common case for simple
-receive-only addresses.
-
-## What DOESN'T need any changes
-
-The relayer's `btc-build-payment` and `stripWitness` utilities are
-already format-agnostic — they handle whatever legacy/segwit tx the
-user constructs. The bottleneck is the covenant's hardcoded payment
-pattern, not any of the off-chain tooling.
-
-## Current user impact
-
-Right now (until Phase 1 covenant update):
-- **Taker**: any wallet works. Segwit, taproot, legacy — doesn't matter.
-  Relayer auto-strips witness.
-- **Maker**: must generate a legacy P2PKH address for receiving BTC.
-  Can use our `btc-keygen` which produces one by default, or any BTC
-  wallet that can produce a legacy address (most can, though it's often
-  not the default).
-
-No fundamental blocker to full segwit/taproot support — just engineering
-extensions in the generator. The protocol design doesn't rule them out.
+See [`docs/audits/03-radiantscript-covenant.md`](./audits/03-radiantscript-covenant.md)
+finding C2 for the attack that motivates the fixed layout. Briefly: if
+the Taker could supply an arbitrary `outputOffset`, they could point it
+at an `OP_RETURN` data push containing the exact pattern
+`<8B value> 19 76a914 <Maker pkh> 88ac`. The "payment" would be embedded
+as inert data inside some real BTC tx, never actually paying the Maker.
+The fixed layout forces output[0] to be the real payment and costs the
+Taker nothing beyond using a modern segwit wallet.

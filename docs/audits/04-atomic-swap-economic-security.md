@@ -4,6 +4,24 @@ Focus: game-theoretic and state-machine security. Griefing vectors,
 fee-sniping, binding, recovery paths, off-chain trust. Covenant opcodes,
 Bitcoin-side crypto, and secrets/deps are in separate reports.
 
+> **Update — Phase 4 + 5 remediation status (2026-04-19).** This report
+> records the audit findings as they were at the original audit pass
+> (commit `d984701`). Several findings below have since been addressed,
+> partially addressed, or re-framed. **Current status of each finding:**
+>
+> | # | Current status |
+> |---|----------------|
+> | S1 `claimDeadline` race | Mitigated at the tooling level only. `generators/gen_maker_covenant.js` bakes a floor at generation time (`now - 30d`); `reference/extract_p2sh_code_hash.js` refuses offers with `claimDeadline < now + 24h` at the client side. RadiantScript's time model has no "now" primitive at claim time, so no covenant-level dynamic check is possible. Honest Maker + honest Taker + mandated Taker-side re-verification → race is closed. Adversarial Maker handcrafting the deploy tooling → race still possible but requires the Taker to skip verification. |
+> | S3 claim() permissionless | **CLOSED** — `contracts/maker_offer.rxd` now requires `checkSig(takerSig, takerPk)` before state transition. |
+> | S4 single-Taker binding | Unchanged; architectural. |
+> | S5 reorg safety at N=6 | Unchanged. |
+> | S7 anchor-window asymmetry | Partially mitigated — relayer pre-flight refuses out-of-window txs (`fetch-spv-proof --anchor-height`). |
+> | S8 off-chain param binding | Unchanged; no `verify-offer` command exists. Taker must still manually re-run `extract_p2sh_code_hash.js`. |
+> | Phase-3 structural constraint Taker grief (legacy/multi-input) | Mitigated — in-repo `btc-build-payment` rejects non-segwit and multi-input; docs (`SEGWIT_SUPPORT.md`, `TRADE_FLOW.md`) updated to warn external-wallet Takers. |
+>
+> See [`2026-04-19-README.md`](./2026-04-19-README.md) for the consolidated
+> view and the commit log (Phases 1-5) for remediation detail.
+
 ---
 
 ## S1 — SHOW-STOPPER: `claimDeadline = 0` → finalize/forfeit race from block 1

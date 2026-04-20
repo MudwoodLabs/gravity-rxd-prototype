@@ -49,13 +49,15 @@ function powBlock(i) {
   return [
     `// --- PoW check: ${H} ---`,
     `bytes n${i} = ${H}.split(72)[1].split(4)[0];`,
-    // Bound on nBits: must match the difficulty Maker committed to at
-    // deploy time. Without this, an attacker who authors a header can set
-    // nBits to a trivial target (e.g. 0xffffff20, target ≈ 2^256 × 0.9999)
-    // and satisfy the covenant with seconds of CPU — audit 03 finding C1.
-    // Bitcoin retargets every 2016 blocks (~2 weeks); Makers must update
-    // expectedNBits at most once per retarget window.
-    `require(n${i} == expectedNBits);`,
+    // Bound on nBits: must match ONE of the two values Maker committed to
+    // at deploy time. Without this, an attacker who authors a header can
+    // set nBits to a trivial target (e.g. 0xffffff20, target ≈ 2^256 ×
+    // 0.9999) and satisfy the covenant with seconds of CPU — audit 03
+    // finding C1. Bitcoin retargets every 2016 blocks (~2 weeks); we accept
+    // BOTH the current and the next-retarget nBits so a trade in flight
+    // across a retarget boundary can still finalize. When not near a
+    // retarget, Maker sets both to the same value.
+    `require(n${i} == expectedNBits || n${i} == expectedNBitsNext);`,
     `bytes m${i} = n${i}.split(3)[0];`,
     `int e${i} = int(n${i}.split(3)[1]);`,
     // nBits-exponent bound guards against corrupt values. Must be in [3,32]
@@ -271,7 +273,8 @@ if (flat) {
   if (includeTypeParam) lines.push(`    int btcReceiveType,`);
   lines.push(`    int btcSatoshis,`);
   lines.push(`    bytes32 btcChainAnchor,     // hash256 of a known mainnet block; h1.prevHash must equal this`);
-  lines.push(`    bytes4 expectedNBits,       // Bitcoin difficulty (LE); every header must match — prevents trivial-target forgery`);
+  lines.push(`    bytes4 expectedNBits,       // current Bitcoin difficulty (LE); every header must match this OR expectedNBitsNext`);
+  lines.push(`    bytes4 expectedNBitsNext,   // next-retarget difficulty; set == expectedNBits when far from retarget`);
   lines.push(`    int claimDeadline,`);
   lines.push(`    int totalPhotonsInOutput`);
   lines.push(`) {`);
@@ -293,7 +296,8 @@ if (flat) {
   if (includeTypeParam) lines.push(`    int btcReceiveType,`);
   lines.push(`    int btcSatoshis,`);
   lines.push(`    bytes32 btcChainAnchor,     // hash256 of a known mainnet block; h1.prevHash must equal this`);
-  lines.push(`    bytes4 expectedNBits,       // Bitcoin difficulty (LE); every header must match — prevents trivial-target forgery`);
+  lines.push(`    bytes4 expectedNBits,       // current Bitcoin difficulty (LE); every header must match this OR expectedNBitsNext`);
+  lines.push(`    bytes4 expectedNBitsNext,   // next-retarget difficulty; set == expectedNBits when far from retarget`);
   lines.push(`    int totalPhotonsInOutput`);
   lines.push(`) function(`);
   lines.push(`    bytes20 takerRadiantPkh,`);
@@ -343,26 +347,40 @@ lines.push(indent([
 // a pair of concatenated 32-byte Merkle nodes (audit 02 finding 1).
 lines.push(indent([
   `// --- Tx-structure constraint (forces known output offset) ---`,
-  `// Byte layout (post-witness-strip, 1-input segwit):`,
-  `//   [0..4)   version`,
-  `//   [4]      inputCount   — require == 0x01`,
-  `//   [5..41)  outpoint (36)`,
-  `//   [41]     scriptSigLen — require == 0x00 (empty = segwit)`,
-  `//   [42..46) sequence (4)`,
-  `//   [46]     outputCount  — require < 0xfd (fits in 1 byte)`,
-  `//   [47..)   output[0]`,
+  `// Accepts two Taker-input shapes:`,
+  `//   (a) Native segwit (P2WPKH / P2TR): empty scriptSig, output[0] at byte 47.`,
+  `//       Byte layout: [0..4)=version [4]=0x01 [5..41)=outpoint`,
+  `//       [41]=0x00 [42..46)=sequence [46]=outputCount [47..)=output[0].`,
+  `//   (b) Wrapped segwit (P2SH-P2WPKH): scriptSig = 0x16 0x00 0x14 <20B pkh>`,
+  `//       (23 bytes), output[0] at byte 70.`,
+  `//       [41]=0x17 [42]=0x16 [43]=0x00 [44]=0x14 [45..65)=pkh`,
+  `//       [65..69)=sequence [69]=outputCount [70..)=output[0].`,
+  `// Legacy P2PKH and multi-input txs are rejected: scriptSigLen varies and`,
+  `// would need a varint parser. See docs/SEGWIT_SUPPORT.md.`,
+  ``,
   `require(rawTx.length > 64);`,
   `require(rawTx.split(4)[1].split(1)[0] == 0x01);`,
-  `require(rawTx.split(41)[1].split(1)[0] == 0x00);`,
-  // outputCount must be in [0x01, 0xfc] so output[0] actually exists and
-  // sits at the hardcoded offset 47. The != comparisons catch multi-byte
-  // varints (>= 0xfd); the == 0x00 catch rejects 0-output txs (which would
-  // not exist in a consensus-valid block, but belt-and-braces).
-  `require(rawTx.split(46)[1].split(1)[0] != 0x00);`,
-  `require(rawTx.split(46)[1].split(1)[0] != 0xfd);`,
-  `require(rawTx.split(46)[1].split(1)[0] != 0xfe);`,
-  `require(rawTx.split(46)[1].split(1)[0] != 0xff);`,
+  `bytes scriptSigLen = rawTx.split(41)[1].split(1)[0];`,
   `int outputOffset = 47;`,
+  `int outputCountByte = 46;`,
+  `if (scriptSigLen == 0x00) {`,
+  `    // Native segwit path. outputOffset stays 47.`,
+  `} else {`,
+  `    // P2SH-P2WPKH path. Validate the fixed-shape scriptSig.`,
+  `    require(scriptSigLen == 0x17);`,
+  `    require(rawTx.split(42)[1].split(1)[0] == 0x16);`,
+  `    require(rawTx.split(43)[1].split(1)[0] == 0x00);`,
+  `    require(rawTx.split(44)[1].split(1)[0] == 0x14);`,
+  `    outputOffset = 70;`,
+  `    outputCountByte = 69;`,
+  `}`,
+  `// outputCount must be in [0x01, 0xfc] so output[0] actually exists and`,
+  `// is the value the payment check reads.`,
+  `bytes outputCountByteVal = rawTx.split(outputCountByte)[1].split(1)[0];`,
+  `require(outputCountByteVal != 0x00);`,
+  `require(outputCountByteVal != 0xfd);`,
+  `require(outputCountByteVal != 0xfe);`,
+  `require(outputCountByteVal != 0xff);`,
   ``,
 ]));
 

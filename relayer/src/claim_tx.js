@@ -13,11 +13,23 @@
  * totalPhotonsInOutput or claim will fail on-chain.
  */
 
+const crypto = require('crypto');
 const rxd = require('@radiant-core/radiantjs');
+
+function hash256(buf) {
+  return crypto.createHash('sha256').update(
+    crypto.createHash('sha256').update(buf).digest()
+  ).digest();
+}
+
+function hash160(buf) {
+  const sha = crypto.createHash('sha256').update(buf).digest();
+  return crypto.createHash('ripemd160').update(sha).digest();
+}
 
 function buildClaimTx({
   offerRedeemHex, offerFundingTxid, offerFundingVout, offerFundingAmount,
-  claimedRedeemHex, feeSats, takerPrivkeyWif,
+  claimedRedeemHex, feeSats, takerPrivkeyWif, expectedClaimedCodeHash,
 }) {
   if (!takerPrivkeyWif) {
     throw new Error(
@@ -34,6 +46,33 @@ function buildClaimTx({
   const claimedRedeemBuf = Buffer.from(claimedRedeemHex, 'hex');
   const claimedRedeem = rxd.Script.fromBuffer(claimedRedeemBuf);
   const claimedP2SHAddress = rxd.Address.payingTo(claimedRedeem);
+
+  // Audit 05 F-13: before broadcasting the claim, verify the caller-supplied
+  // `claimedRedeemHex` actually produces the P2SH scriptPubKey that
+  // `MakerOffer.claim()` will test against. Matches the covenant's
+  // `hash256(tx.outputs[0].codeScript) == expectedClaimedCodeHash` check
+  // done on-chain — for P2SH deployments the codeScript is the full 23-byte
+  // scriptPubKey `OP_HASH160 <20B hash160(redeem)> OP_EQUAL`.
+  if (expectedClaimedCodeHash) {
+    const scriptHash = hash160(claimedRedeemBuf);
+    const claimedP2SHScriptPubKey = Buffer.concat([
+      Buffer.from([0xa9, 0x14]),
+      scriptHash,
+      Buffer.from([0x87]),
+    ]);
+    const computed = hash256(claimedP2SHScriptPubKey).toString('hex');
+    const expected = expectedClaimedCodeHash.toLowerCase();
+    if (computed !== expected) {
+      throw new Error(
+        `claimedRedeemHex does not match expectedClaimedCodeHash.\n` +
+        `  computed: ${computed}\n` +
+        `  expected: ${expected}\n` +
+        `The MakerOffer will refuse this claim on-chain. Check that the ` +
+        `claimed redeem hex encodes the same constructor params (takerRadiantPkh, ` +
+        `claimDeadline, etc.) that Maker committed to.`
+      );
+    }
+  }
 
   const offerP2SHAddress = rxd.Address.payingTo(offerRedeem);
   const offerP2SHScriptPubKey = rxd.Script.buildScriptHashOut(offerP2SHAddress);

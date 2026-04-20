@@ -87,6 +87,34 @@ function main() {
     process.exit(2);
   }
   const artifact = JSON.parse(fs.readFileSync(args[0], 'utf-8'));
+
+  // Refuse known-insecure contract templates. These are kept in
+  // `contracts/legacy/` for historical reference, but an operator running
+  // this tool against their artifact would produce a deployable P2SH with
+  // missing security checks (permissionless claim, no SPV verify, etc.).
+  const BANNED = {
+    'MakerOfferSimple': 'skips Taker signature on claim — audit 04 S3 (grief vector)',
+    'MakerClaimedStub': 'finalize() has no SPV check — any party could drain the UTXO',
+    'MakerClaimed': 'hand-written reference; use generator output',
+    'MakerCovenant6x12': 'pre-Phase-4 covenant — no nBits bound, no structural constraint. Regenerate.',
+    'MakerCovenantFlat6x12': 'pre-Phase-4 covenant — no nBits bound, no structural constraint. Regenerate.',
+    'VerifyPayment': 'standalone primitive, not a deployable covenant',
+  };
+  if (BANNED[artifact.contract]) {
+    const bypass = process.argv.includes('--i-understand-legacy-artifact=true');
+    console.error(
+      `\nartifact.contract = "${artifact.contract}" is on the deny-list:\n` +
+      `  ${BANNED[artifact.contract]}\n\n` +
+      (bypass
+        ? `Proceeding per --i-understand-legacy-artifact=true.`
+        : `Refusing to compute. For a real deployment, regenerate from\n` +
+          `generators/gen_maker_covenant.js, compile the output, and rerun\n` +
+          `this tool on the new artifact. To bypass (for research / audit\n` +
+          `recomputation), pass --i-understand-legacy-artifact=true.\n`)
+    );
+    if (!bypass) process.exit(2);
+  }
+
   const params = {};
   for (const a of args.slice(1)) {
     const eq = a.indexOf('=');
@@ -111,14 +139,25 @@ function main() {
     if (cd < minFuture) {
       const short = minFuture - cd;
       const bypassed = params['--i-understand-short-deadline'] === 'true';
+      if (!bypassed) {
+        console.error(
+          `\nclaimDeadline=${cd} is ${short}s short of now+24h.\n\n` +
+          `Refusing to compute — with a near-past/present deadline the\n` +
+          `forfeit() path opens almost immediately, so the Maker can race\n` +
+          `the Taker's claim (audit 04 finding S1).\n\n` +
+          `⚠️ DO NOT pass --i-understand-short-deadline=true if a\n` +
+          `counter-party asked you to. They may be constructing an offer\n` +
+          `designed to grief you out of your bond. The flag exists only for\n` +
+          `time-boxed use-cases YOU set yourself (test harness, OTC desk\n` +
+          `with explicit short-deadline contracts).\n`
+        );
+        process.exit(2);
+      }
       console.error(
-        `claimDeadline=${cd} is less than 24h in the future (short by ${short}s). ` +
-        (bypassed
-          ? `proceeding anyway per --i-understand-short-deadline=true.`
-          : `Refusing to compute — the finalize/forfeit race would be open ` +
-            `almost immediately. Add --i-understand-short-deadline=true to bypass.`)
+        `claimDeadline=${cd} is ${short}s short of now+24h; proceeding ` +
+        `per --i-understand-short-deadline=true. If someone else asked you ` +
+        `to pass this flag, STOP — this is a grief-attack pattern.`
       );
-      if (!bypassed) process.exit(2);
     }
   }
 

@@ -50,32 +50,56 @@ function parseArgs() {
 // is set, because argv is visible to ps auxww and persists in shell history.
 function loadPrivkey(args) {
   if (args['privkey-file']) {
-    // Refuse to read a privkey file that's world/group-readable or owned by
-    // someone other than the current uid. Bypass with
-    // --i-understand-weak-file-perms true for test envs.
-    const st = fs.statSync(args['privkey-file']);
-    const weakPerms = (st.mode & 0o077) !== 0;
-    const wrongOwner = typeof process.getuid === 'function' && st.uid !== process.getuid();
+    // Open-then-fstat avoids the symlink TOCTOU where an attacker could
+    // swap the path between statSync and readFileSync. We open once, check
+    // the file descriptor's actual inode perms, then read from the same fd.
     const bypass = args['i-understand-weak-file-perms'] === 'true' ||
                    args['i-understand-weak-file-perms'] === true;
-    if ((weakPerms || wrongOwner) && !bypass) {
-      console.error(
-        `privkey file ${args['privkey-file']} has unsafe permissions ` +
-        `(mode=${(st.mode & 0o777).toString(8)}, owner uid=${st.uid}). ` +
-        `Expected mode 0600 owned by current uid. ` +
-        `Fix with: chmod 600 ${args['privkey-file']}`
-      );
-      process.exit(2);
-    }
-    const raw = fs.readFileSync(args['privkey-file'], 'utf-8').trim();
-    if (raw.startsWith('{')) {
-      const obj = JSON.parse(raw);
-      if (!obj.privkey_wif) {
-        console.error('privkey file JSON has no privkey_wif field'); process.exit(2);
+    const fd = fs.openSync(args['privkey-file'], 'r');
+    try {
+      const st = fs.fstatSync(fd);
+      if (!st.isFile()) {
+        console.error(`privkey file ${args['privkey-file']} is not a regular file`);
+        process.exit(2);
       }
-      return obj.privkey_wif;
+      const weakPerms = (st.mode & 0o077) !== 0;
+      const wrongOwner = typeof process.getuid === 'function' && st.uid !== process.getuid();
+      const setuidBits = (st.mode & 0o6000) !== 0;  // setuid/setgid
+      if (setuidBits && !bypass) {
+        console.error(
+          `privkey file ${args['privkey-file']} has setuid/setgid bits set ` +
+          `(mode=${(st.mode & 0o7777).toString(8)}). Refusing.`
+        );
+        process.exit(2);
+      }
+      if ((weakPerms || wrongOwner) && !bypass) {
+        console.error(
+          `privkey file ${args['privkey-file']} has unsafe permissions ` +
+          `(mode=${(st.mode & 0o777).toString(8)}, owner uid=${st.uid}). ` +
+          `Expected mode 0600 owned by current uid. ` +
+          `Fix with: chmod 600 ${args['privkey-file']}`
+        );
+        process.exit(2);
+      }
+      // Read from the same fd — no path-based reopen means no TOCTOU window.
+      const chunks = [];
+      const buf = Buffer.alloc(4096);
+      let bytesRead;
+      while ((bytesRead = fs.readSync(fd, buf, 0, buf.length, null)) > 0) {
+        chunks.push(buf.slice(0, bytesRead).toString('utf-8'));
+      }
+      const raw = chunks.join('').trim();
+      if (raw.startsWith('{')) {
+        const obj = JSON.parse(raw);
+        if (!obj.privkey_wif) {
+          console.error('privkey file JSON has no privkey_wif field'); process.exit(2);
+        }
+        return obj.privkey_wif;
+      }
+      return raw;
+    } finally {
+      fs.closeSync(fd);
     }
-    return raw;
   }
   if (args['privkey-wif']) {
     if (args['i-understand-argv-leaks'] !== 'true' && args['i-understand-argv-leaks'] !== true) {
@@ -151,6 +175,26 @@ async function cmdFetchSpvProof() {
   const rawTxOriginal = await btc.getRawTx(args.txid);
   const mp = await btc.getMerkleProof(args.txid);
   const branch = proof.buildBranch(mp.merkle, mp.pos);
+
+  // Merkle branch depth check: the covenant unrolls a FIXED M levels. If
+  // the block's tree is shallower than M (low-tx-count block), the covenant
+  // will split past the end of the branch and fail with an opaque error.
+  // Accept --merkle-depth M to reject mismatches up-front.
+  if (args['merkle-depth'] !== undefined) {
+    const expectedDepth = parseInt(args['merkle-depth'], 10);
+    if (!Number.isInteger(expectedDepth) || expectedDepth < 1 || expectedDepth > 20) {
+      console.error('--merkle-depth must be an integer in [1, 20]'); process.exit(2);
+    }
+    if (mp.merkle.length !== expectedDepth) {
+      console.error(
+        `merkle branch depth mismatch: mempool returned ${mp.merkle.length} ` +
+        `siblings, covenant expects ${expectedDepth}. The block's tree depth ` +
+        `differs from the covenant's hardcoded M. Pick a different tx (in a ` +
+        `larger block) or regenerate the covenant with matching M.`
+      );
+      process.exit(1);
+    }
+  }
 
   // Auto-strip witness from segwit/taproot txs so that hash256(rawTx) == txid
   // and the covenant accepts the proof. User can opt out with --no-strip to
@@ -246,12 +290,18 @@ async function cmdFetchSpvProof() {
     }
   }
 
-  // expectedNBits check (covenant's CV-1 defense).
+  // expectedNBits check (covenant's CV-1 defense). Accepts either
+  // --expected-nbits alone or both --expected-nbits + --expected-nbits-next
+  // (the latter covers Bitcoin retarget boundaries).
   if (args['expected-nbits']) {
     if (!/^[0-9a-fA-F]{8}$/.test(args['expected-nbits'])) {
       console.error('--expected-nbits must be 8 hex chars (4 bytes LE)'); process.exit(2);
     }
-    const nb = validators.verifyNBitsMatch(headers, args['expected-nbits']);
+    const nbNext = args['expected-nbits-next'];
+    if (nbNext && !/^[0-9a-fA-F]{8}$/.test(nbNext)) {
+      console.error('--expected-nbits-next must be 8 hex chars (4 bytes LE)'); process.exit(2);
+    }
+    const nb = validators.verifyNBitsMatch(headers, args['expected-nbits'], nbNext);
     validation.nbits_match = nb.pass;
     if (!nb.pass) {
       warnings.push(`expectedNBits mismatch: ${nb.reason}`);
@@ -281,11 +331,18 @@ async function cmdFetchSpvProof() {
     if (!validators.PAYMENT_TYPES[type]) {
       console.error(`--btc-receive-type must be one of: ${Object.keys(validators.PAYMENT_TYPES).join('|')}`); process.exit(2);
     }
-    // outputOffset is 47 for the constrained 1-input segwit layout.
-    const pay = validators.verifyPayment(rawTx, 47, args['btc-receive-hash'], sats, type);
-    validation.payment = pay.pass;
-    if (!pay.pass) {
-      warnings.push(`payment check FAILED: ${pay.reason}`);
+    // outputOffset comes from the structural check (47 for native segwit,
+    // 70 for P2SH-P2WPKH Taker input). Payment check is skipped silently
+    // if the structural check failed (we already warned).
+    if (structResult.pass) {
+      const pay = validators.verifyPayment(
+        rawTx, structResult.outputOffset,
+        args['btc-receive-hash'], sats, type,
+      );
+      validation.payment = pay.pass;
+      if (!pay.pass) {
+        warnings.push(`payment check FAILED: ${pay.reason}`);
+      }
     }
   }
 
@@ -380,6 +437,15 @@ async function cmdBuildFinalizeTx() {
     fundingAmount: Number(args['funding-amount']),
     toAddress: args['to-address'],
     feeSats: Number(args['fee-sats']),
+    // Optional independent re-checks (see finalize_tx.js): if provided, the
+    // builder refuses to emit a tx that doesn't satisfy the covenant's
+    // payment / nBits / anchor requirements.
+    expectedNBits: args['expected-nbits'],
+    expectedNBitsNext: args['expected-nbits-next'],
+    anchorHash: args['anchor-hash'],
+    btcReceiveHash: args['btc-receive-hash'],
+    btcReceiveType: args['btc-receive-type'],
+    btcSatoshis: args['btc-satoshis'] !== undefined ? Number(args['btc-satoshis']) : undefined,
   });
 
   console.log(`=== finalize() spending tx ===`);
@@ -426,6 +492,11 @@ async function cmdBuildClaimTx() {
     claimedRedeemHex: readHex(args['claimed-redeem-hex']),
     feeSats: Number(args['fee-sats']),
     takerPrivkeyWif,
+    // Optional: if provided, the builder will re-hash the claimed redeem
+    // script and assert it matches the 32-byte expected code hash before
+    // broadcasting. Prevents wasted fees on a claim the MakerOffer will
+    // reject on-chain.
+    expectedClaimedCodeHash: args['expected-claimed-code-hash'],
   });
 
   console.log(`=== claim() tx ===`);
@@ -612,6 +683,9 @@ async function cmdBtcBuildPayment() {
     amountSats: Number(args['amount-sats']),
     feeSats: Number(args['fee-sats']),
     changeAddress: args['change-address'],
+    // Shape of the Taker's funding UTXO. 'p2wpkh' (default, bc1q…) or
+    // 'p2sh-p2wpkh' (3… wrapped segwit). Covenant accepts both post-Phase-5.
+    inputType: args['input-type'] || 'p2wpkh',
   });
 
   console.log('=== BTC payment tx (segwit-v0, single P2WPKH input) ===');

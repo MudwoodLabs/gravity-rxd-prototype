@@ -57,6 +57,40 @@ function buildFinalizeTx(opts) {
                     'covenant will reject. Strip witness data first.');
   }
 
+  // Per-invariant pre-flight: the SPV proof JSON records validation
+  // results from fetch-spv-proof, but the proof could have been generated
+  // without covenant params (anchor, nBits, payment). If the caller passes
+  // expected values here we re-check them independently — the goal is
+  // "buildFinalizeTx is the last chance to catch a doomed proof before
+  // Radiant fees are burned" (audit 05 F-2 residual).
+  if (opts.expectedNBits) {
+    const nb = validators.verifyNBitsMatch(
+      spvProof.headers,
+      opts.expectedNBits,
+      opts.expectedNBitsNext,
+    );
+    if (!nb.pass) {
+      throw new Error(`expectedNBits mismatch in SPV proof: ${nb.reason}`);
+    }
+  }
+  if (opts.anchorHash) {
+    const a = validators.verifyAnchor(spvProof.headers[0], opts.anchorHash);
+    if (!a.pass) {
+      throw new Error(`chain anchor mismatch: h1.prevHash=${a.got}, expected=${opts.anchorHash}`);
+    }
+  }
+  if (opts.btcReceiveHash && opts.btcSatoshis !== undefined && opts.btcReceiveType) {
+    // outputOffset is dynamic based on Taker-input shape (47 for native
+    // segwit, 70 for P2SH-P2WPKH). Derive it from verifyTxStructure.
+    const pay = validators.verifyPayment(
+      spvProof.raw_tx, struct.outputOffset,
+      opts.btcReceiveHash, opts.btcSatoshis, opts.btcReceiveType,
+    );
+    if (!pay.pass) {
+      throw new Error(`payment output check failed: ${pay.reason}`);
+    }
+  }
+
   const redeemScriptBuf = Buffer.from(redeemHex, 'hex');
   const redeemScript = rxd.Script.fromBuffer(redeemScriptBuf);
 

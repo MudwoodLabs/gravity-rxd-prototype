@@ -172,34 +172,72 @@ function verifyPayment(rawTxHex, outputOffset, expectedHashHex, requiredSatoshis
   return { pass: true, value, hash: hash.toString('hex') };
 }
 
-// Check every header's nBits matches the Maker-committed expected value.
-// This is the JS mirror of the covenant's `require(n{i} == expectedNBits)`
-// that defends against trivial-target forgery (audit 03 C1).
-function verifyNBitsMatch(headersHex, expectedNBitsHex) {
+// Check every header's nBits matches ONE of the Maker-committed expected
+// values. This mirrors the covenant's
+// `require(n{i} == expectedNBits || n{i} == expectedNBitsNext)` — two
+// values lets a trade span a retarget boundary without bricking.
+// `expectedNBitsNextHex` is optional; if omitted, defaults to the same
+// value as `expectedNBitsHex` (non-retarget case).
+function verifyNBitsMatch(headersHex, expectedNBitsHex, expectedNBitsNextHex) {
   const expected = Buffer.from(expectedNBitsHex, 'hex');
   if (expected.length !== 4) {
     return { pass: false, reason: 'expectedNBits must be 4 bytes (LE hex)' };
   }
+  const expectedNext = expectedNBitsNextHex
+    ? Buffer.from(expectedNBitsNextHex, 'hex')
+    : expected;
+  if (expectedNext.length !== 4) {
+    return { pass: false, reason: 'expectedNBitsNext must be 4 bytes (LE hex)' };
+  }
   for (let i = 0; i < headersHex.length; i++) {
     const h = Buffer.from(headersHex[i], 'hex');
     const n = h.slice(72, 76);
-    if (!n.equals(expected)) {
-      return { pass: false, reason: `header[${i}] nBits ${n.toString('hex')} != expected ${expectedNBitsHex}` };
+    if (!n.equals(expected) && !n.equals(expectedNext)) {
+      return {
+        pass: false,
+        reason: `header[${i}] nBits ${n.toString('hex')} matches neither ` +
+          `${expectedNBitsHex} nor ${expectedNBitsNextHex || '(same)'}`,
+      };
     }
   }
   return { pass: true };
 }
 
-// Verify the rawTx follows the 1-input segwit layout the covenant expects
-// (audit 03 C2 defense). Returns the hardcoded outputOffset on success.
+// Verify the rawTx follows one of the Taker-input shapes the covenant
+// accepts. Mirrors the two-branch structural check in
+// generators/gen_maker_covenant.js:
+//   (a) Native segwit (P2WPKH/P2TR): empty scriptSig → outputOffset = 47
+//   (b) P2SH-P2WPKH: 23-byte scriptSig 0x16 0x00 0x14 <20B> → outputOffset = 70
 function verifyTxStructure(rawTxHex) {
   const rawTx = Buffer.from(rawTxHex, 'hex');
   if (rawTx.length <= 64) return { pass: false, reason: 'rawTx length must be > 64' };
-  if (rawTx[4] !== 0x01) return { pass: false, reason: `inputCount must be 1 (got ${rawTx[4]})` };
-  if (rawTx[41] !== 0x00) return { pass: false, reason: `scriptSig must be empty, ie segwit input (got len ${rawTx[41]})` };
-  if (rawTx[46] >= 0xfd) return { pass: false, reason: `outputCount varint not 1-byte (got ${rawTx[46]})` };
-  if (rawTx[46] === 0x00) return { pass: false, reason: 'outputCount must be >= 1' };
-  return { pass: true, outputOffset: 47 };
+  if (rawTx[4] !== 0x01) return { pass: false, reason: `inputCount must be 1 (got 0x${rawTx[4].toString(16)})` };
+
+  let outputOffset, outputCountByte, inputShape;
+  const scriptSigLen = rawTx[41];
+  if (scriptSigLen === 0x00) {
+    outputOffset = 47;
+    outputCountByte = 46;
+    inputShape = 'p2wpkh-or-p2tr';
+  } else if (scriptSigLen === 0x17) {
+    if (rawTx[42] !== 0x16) return { pass: false, reason: `expected 0x16 at byte 42, got 0x${rawTx[42].toString(16)}` };
+    if (rawTx[43] !== 0x00) return { pass: false, reason: `expected 0x00 at byte 43 (segwit v0), got 0x${rawTx[43].toString(16)}` };
+    if (rawTx[44] !== 0x14) return { pass: false, reason: `expected 0x14 at byte 44 (push 20), got 0x${rawTx[44].toString(16)}` };
+    outputOffset = 70;
+    outputCountByte = 69;
+    inputShape = 'p2sh-p2wpkh';
+  } else {
+    return {
+      pass: false,
+      reason: `scriptSig must be empty (native segwit, 0x00) or 23-byte ` +
+              `P2SH-P2WPKH redeem (0x17); got length 0x${scriptSigLen.toString(16)}`,
+    };
+  }
+
+  const outputCount = rawTx[outputCountByte];
+  if (outputCount === 0x00) return { pass: false, reason: 'outputCount must be >= 1' };
+  if (outputCount >= 0xfd) return { pass: false, reason: `outputCount varint not 1-byte (got 0x${outputCount.toString(16)})` };
+  return { pass: true, outputOffset, inputShape };
 }
 
 // Check that the FIRST header in the proof chain extends the expected

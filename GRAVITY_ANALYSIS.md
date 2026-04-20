@@ -4,6 +4,24 @@
 **Source paper**: [`gravity.pdf`](https://github.com/Radiant-Core/Project-Gravity/blob/main/gravity.pdf) (also at [Radiant-Core/Project-Gravity](https://github.com/Radiant-Core/Project-Gravity))
 **Author/researcher notes**: Zyrtnin
 
+> ⚠️ **This document is a mid-project research log and is now partially
+> stale.** It references filenames and behaviour from before the 2026-04-19
+> security audits and subsequent hardening phases. In particular:
+> - `contracts/maker_covenant_{,flat_}6x12.rxd`, `verify_payment.rxd`,
+>   `maker_claimed.rxd`, `maker_offer_simple.rxd` have all been moved
+>   to `contracts/legacy/` as DO NOT DEPLOY.
+> - `reference/extract_code_hash.js` has been renamed to
+>   `extract_code_hash_NON_P2SH_UNUSED.js` — every real deployment uses
+>   `extract_p2sh_code_hash.js`.
+> - The documented `claimDeadline = 0` / "forfeit always spendable" demo
+>   is UNSAFE and no longer deployable (covenant now floors
+>   claimDeadline).
+>
+> For the current state: see [`HANDOFF.md`](./HANDOFF.md),
+> [`relayer/TRADE_FLOW.md`](./relayer/TRADE_FLOW.md),
+> [`docs/audits/`](./docs/audits/), and
+> [`docs/SEGWIT_SUPPORT.md`](./docs/SEGWIT_SUPPORT.md).
+
 ---
 
 ## 1. What Gravity is
