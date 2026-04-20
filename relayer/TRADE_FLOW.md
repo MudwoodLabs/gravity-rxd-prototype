@@ -26,7 +26,7 @@ person with BTC plays Taker. Protocol is identical.
 ### 1. Maker generates a Bitcoin receive address
 
 ```bash
-node src/cli.js btc-keygen > maker-btc-keys.json
+node src/cli.js btc-keygen --out maker-btc-keys.json
 jq -r .address maker-btc-keys.json
 # e.g. 1WeFdymFwwC8pEU2N3Hsm9E8RdveV6Gxd
 jq -r .pkh_hex maker-btc-keys.json
@@ -109,7 +109,7 @@ passes and Maker forfeits.
 
 ```bash
 # Taker's own BTC keypair
-node src/cli.js btc-keygen > taker-btc-keys.json
+node src/cli.js btc-keygen --out taker-btc-keys.json
 
 # [OFF-TOOL] Fund the Taker's BTC address from existing BTC
 # (exchange withdrawal, another wallet). Wait 1+ BTC confirmation.
@@ -118,9 +118,14 @@ node src/cli.js btc-keygen > taker-btc-keys.json
 node src/cli.js btc-get-utxos --address $(jq -r .address taker-btc-keys.json)
 # → JSON with [{ txid, vout, value, status }, ...]
 
-# Build signed legacy payment to Maker's BTC pkh
+# Build signed legacy payment to Maker's BTC pkh.
+#
+# Pass the privkey via --privkey-file so it never hits argv (where it
+# would be visible to other local users via `ps auxww` and persist in
+# shell history). The file should be mode 0600, as btc-keygen --out
+# writes it.
 node src/cli.js btc-build-payment \
-  --privkey-wif $(jq -r .privkey_wif taker-btc-keys.json) \
+  --privkey-file taker-btc-keys.json \
   --utxo-txid <from above> \
   --utxo-vout <from above> \
   --utxo-amount <from above> \

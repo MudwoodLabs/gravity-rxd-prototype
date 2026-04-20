@@ -24,12 +24,14 @@
  */
 
 const fs = require('fs');
-const { execSync } = require('child_process');
+const path = require('path');
+const { spawnSync } = require('child_process');
 const btc = require('./btc');
 const proof = require('./proof');
 const { buildFinalizeTx } = require('./finalize_tx');
 const { buildClaimTx } = require('./claim_tx');
 const btcWallet = require('./btc_wallet');
+const validators = require(path.join(__dirname, '..', '..', 'reference', 'validators'));
 
 function parseArgs() {
   const argv = process.argv.slice(3); // skip: node cli.js <command>
@@ -41,22 +43,94 @@ function parseArgs() {
   return args;
 }
 
+// Load a WIF privkey, preferring --privkey-file over --privkey-wif.
+// A file load accepts either a raw WIF (optionally with trailing newline) or
+// a JSON object like {"privkey_wif": "..."} (the shape emitted by btc-keygen
+// --out). --privkey-wif on argv is rejected unless --i-understand-argv-leaks
+// is set, because argv is visible to ps auxww and persists in shell history.
+function loadPrivkey(args) {
+  if (args['privkey-file']) {
+    const raw = fs.readFileSync(args['privkey-file'], 'utf-8').trim();
+    if (raw.startsWith('{')) {
+      const obj = JSON.parse(raw);
+      if (!obj.privkey_wif) {
+        console.error('privkey file JSON has no privkey_wif field'); process.exit(2);
+      }
+      return obj.privkey_wif;
+    }
+    return raw;
+  }
+  if (args['privkey-wif']) {
+    if (args['i-understand-argv-leaks'] !== 'true' && args['i-understand-argv-leaks'] !== true) {
+      console.error(
+        '--privkey-wif exposes the WIF on argv (visible to ps, shell history). ' +
+        'Use --privkey-file <path> instead, or pass --i-understand-argv-leaks true ' +
+        'to proceed.'
+      );
+      process.exit(2);
+    }
+    return args['privkey-wif'];
+  }
+  console.error('one of --privkey-file <path> or --privkey-wif <wif> required'); process.exit(2);
+}
+
 async function cmdFetchSpvProof() {
   const args = parseArgs();
   if (!args.txid) {
     console.error('--txid required');
     process.exit(2);
   }
+  if (!/^[0-9a-fA-F]{64}$/.test(args.txid)) {
+    console.error('--txid must be 64 hex chars'); process.exit(2);
+  }
   const N = parseInt(args.headers || '6', 10);
+  if (!Number.isInteger(N) || N < 1 || N > 200) {
+    console.error('--headers must be an integer in [1, 200]'); process.exit(2);
+  }
 
   const meta = await btc.getTxMeta(args.txid);
   if (!meta.status || !meta.status.confirmed) {
     console.error(`tx ${args.txid} not yet confirmed`);
     process.exit(1);
   }
+  const txBlockHeight = meta.status.block_height;
 
-  const startHeight = meta.status.block_height;
+  // Anchor alignment (audit 05 F-3): the covenant requires
+  // h1.prevHash == btcChainAnchor, so h1 must be block anchor+1. If the
+  // caller supplies --anchor-height H, we start the header chain at H+1
+  // (not at the tx's block). The tx itself must land somewhere in
+  // [H+1, H+N] — otherwise the flexible-Merkle-anchor check won't match
+  // any header.
+  let startHeight;
+  if (args['anchor-height'] !== undefined) {
+    const anchorHeight = parseInt(args['anchor-height'], 10);
+    if (!Number.isInteger(anchorHeight) || anchorHeight < 0) {
+      console.error('--anchor-height must be a non-negative integer'); process.exit(2);
+    }
+    startHeight = anchorHeight + 1;
+    if (txBlockHeight < startHeight || txBlockHeight > startHeight + N - 1) {
+      console.error(
+        `tx is in block ${txBlockHeight}, outside anchor window ` +
+        `[${startHeight}, ${startHeight + N - 1}]. Wait for tx to confirm ` +
+        `within the window, or re-anchor at a later height.`
+      );
+      process.exit(1);
+    }
+  } else {
+    // No anchor supplied — fall back to legacy behaviour (h1 = tx's block).
+    // This will NOT satisfy a covenant that enforces anchor alignment. Emit a
+    // warning so the caller sees the mismatch before broadcasting.
+    startHeight = txBlockHeight;
+  }
+
+  // Confirmation-count guard (audit 05 F-14): the returned headers must all
+  // exist. Reject if the chain doesn't have N blocks on top of startHeight.
   const headers = await btc.getHeaderChain(startHeight, N);
+  if (headers.length !== N) {
+    console.error(`could only fetch ${headers.length}/${N} headers — tx may not be deep enough`);
+    process.exit(1);
+  }
+
   const rawTxOriginal = await btc.getRawTx(args.txid);
   const mp = await btc.getMerkleProof(args.txid);
   const branch = proof.buildBranch(mp.merkle, mp.pos);
@@ -111,11 +185,50 @@ async function cmdFetchSpvProof() {
       `Use --no-strip true to see the original serialization.`
     );
   }
+  if (rawTx.length / 2 <= 64) {
+    warnings.push(
+      'raw_tx is ≤ 64 bytes — a 64-byte tx is indistinguishable from a pair ' +
+      'of concatenated 32-byte Merkle nodes (CVE-class ambiguity). The ' +
+      'covenant should reject this, and if not, an attacker could forge ' +
+      'inclusion proofs.'
+    );
+  }
+
+  // Pre-submit reference-validator pass (audit 05 F-1). We run the same
+  // algorithm the covenant runs, so the relayer catches broken proofs before
+  // they waste Radiant fees. Each failure becomes a warning; the exit code
+  // still reflects the core Merkle-root + txid-hash invariants since those
+  // are what the caller historically relies on.
+  const validation = {};
+  const chainResult = validators.verifyChain(headers);
+  validation.chain_pow_and_link = chainResult.allOk;
+  if (!chainResult.allOk) {
+    warnings.push(
+      'chain validation FAILED: ' + chainResult.results.filter(r => !r.powOk || !r.linkOk)
+        .map(r => `[${r.index}] ${r.reason}`).join('; ')
+    );
+  }
+  if (args['anchor-hash']) {
+    if (!/^[0-9a-fA-F]{64}$/.test(args['anchor-hash'])) {
+      console.error('--anchor-hash must be 64 hex chars'); process.exit(2);
+    }
+    const anchor = validators.verifyAnchor(headers[0], args['anchor-hash']);
+    validation.chain_anchor = anchor.pass;
+    if (!anchor.pass) {
+      warnings.push(
+        `anchor mismatch: h1.prevHash is ${anchor.got}, expected ${args['anchor-hash']}. ` +
+        `The covenant will reject — pass the right --anchor-hash or re-anchor.`
+      );
+    }
+  }
 
   const out = {
     txid: args.txid,
-    block_height: startHeight,
+    tx_block_height: txBlockHeight,
+    h1_block_height: startHeight,
     tx_position_in_block: mp.pos,
+    anchor_height: args['anchor-height'] !== undefined ? parseInt(args['anchor-height'], 10) : null,
+    anchor_hash: args['anchor-hash'] || null,
     headers: headers,
     header_count: N,
     raw_tx: rawTx,
@@ -126,11 +239,19 @@ async function cmdFetchSpvProof() {
     expected_root_LE: expectedRoot.toString('hex'),
     merkle_root_matches: match,
     raw_tx_hashes_to_txid: rawTxHashesToTxid,
+    validation,
     warnings: warnings,
   };
 
   console.log(JSON.stringify(out, null, 2));
-  process.exit(match && rawTxHashesToTxid ? 0 : 3);
+  // Exit non-zero if any core invariant broke: Merkle root, hash→txid,
+  // chain PoW+link, or (when supplied) anchor match.
+  const ok =
+    match &&
+    rawTxHashesToTxid &&
+    validation.chain_pow_and_link &&
+    (validation.chain_anchor === undefined || validation.chain_anchor === true);
+  process.exit(ok ? 0 : 3);
 }
 
 async function cmdValidateProof() {
@@ -255,17 +376,44 @@ async function cmdBroadcast() {
     : args['tx-hex'];
 
   if (method === 'ssh') {
-    const host = args.host || '<your-radiant-node-ssh>';
+    const host = args.host;
     const container = args.container || 'radiant-mainnet';
     const datadir = args.datadir || '/home/radiant/.radiant';
-    const cmd = `ssh ${host} "sudo docker exec ${container} radiant-cli -datadir=${datadir} sendrawtransaction ${txHex}"`;
-    try {
-      const out = execSync(cmd, { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
-      process.stdout.write(out);
-    } catch (e) {
-      console.error('broadcast failed:', e.stderr?.toString() || e.message);
+
+    // All four inputs go through ssh to a remote shell. Validate strictly
+    // to prevent injection on either side. txHex is the largest surface and
+    // the only one that regularly carries large attacker-controlled content
+    // (via --tx-hex <path>), so its regex is pinned to hex-only.
+    if (!host || host.startsWith('<')) {
+      console.error('--host required (e.g. user@radiant-node)');
+      process.exit(2);
+    }
+    if (!/^[A-Za-z0-9._@-]+$/.test(host)) {
+      console.error('--host contains unsupported characters'); process.exit(2);
+    }
+    if (!/^[A-Za-z0-9._-]+$/.test(container)) {
+      console.error('--container contains unsupported characters'); process.exit(2);
+    }
+    if (!/^[A-Za-z0-9._/-]+$/.test(datadir)) {
+      console.error('--datadir contains unsupported characters'); process.exit(2);
+    }
+    if (!/^[0-9a-fA-F]+$/.test(txHex) || txHex.length % 2 !== 0) {
+      console.error('tx hex must be even-length hex string'); process.exit(2);
+    }
+
+    const remoteCmd =
+      `sudo docker exec ${container} radiant-cli -datadir=${datadir} ` +
+      `sendrawtransaction ${txHex}`;
+    const r = spawnSync('ssh', [host, remoteCmd], {
+      encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    if (r.status !== 0) {
+      // Strip the tx hex from any stderr echo so CI logs don't capture it.
+      const redacted = (r.stderr || '').replace(txHex, '<tx-hex-redacted>');
+      console.error('broadcast failed:', redacted || r.error?.message || 'unknown');
       process.exit(1);
     }
+    process.stdout.write(r.stdout);
   } else if (method === 'rpc') {
     // Plain JSON-RPC to a locally-reachable Radiant node. --rpc-url required.
     if (!args['rpc-url']) { console.error('--rpc-url required for --method rpc'); process.exit(2); }
@@ -290,7 +438,27 @@ async function cmdBroadcast() {
 }
 
 async function cmdBtcKeygen() {
+  const args = parseArgs();
   const kp = btcWallet.generateKeypair();
+
+  const outPath = args.out;
+  if (outPath) {
+    // Write the full keypair (incl. WIF) to a file with 0600, print only
+    // public material to stdout so the privkey never hits terminal scrollback.
+    fs.writeFileSync(outPath, JSON.stringify(kp, null, 2), { mode: 0o600 });
+    // Re-chmod in case umask masked the create mode.
+    fs.chmodSync(outPath, 0o600);
+    const { privkey_wif: _ignored, ...pub } = kp;
+    console.log(JSON.stringify({ ...pub, privkey_wif_path: outPath }, null, 2));
+    return;
+  }
+  if (args['print-privkey'] !== 'true' && args['print-privkey'] !== true) {
+    console.error(
+      'refusing to print WIF to stdout. Pass --out <path> to write keys to a ' +
+      '0600 file (recommended), or --print-privkey true to keep the old behaviour.'
+    );
+    process.exit(2);
+  }
   console.log(JSON.stringify(kp, null, 2));
 }
 
@@ -303,7 +471,7 @@ async function cmdBtcGetUtxos() {
 
 async function cmdBtcBuildPayment() {
   const args = parseArgs();
-  const required = ['privkey-wif', 'utxo-txid', 'utxo-vout', 'utxo-amount',
+  const required = ['utxo-txid', 'utxo-vout', 'utxo-amount',
                     'to-pkh', 'amount-sats', 'fee-sats'];
   const missing = required.filter(k => !args[k]);
   if (missing.length) {
@@ -311,6 +479,11 @@ async function cmdBtcBuildPayment() {
     console.error('Hint: multiple --utxo-* triples via JSON file with --utxos <file>');
     process.exit(2);
   }
+
+  // Privkey source: prefer --privkey-file (private, not on argv / in shell
+  // history). --privkey-wif on argv is visible to ps auxww and shell history,
+  // so only accept it when the user opts in explicitly.
+  const privkeyWif = loadPrivkey(args);
 
   // Support: --utxos <json-file> listing multiple UTXOs, or single via --utxo-*
   let inputs;
@@ -325,7 +498,7 @@ async function cmdBtcBuildPayment() {
   }
 
   const result = btcWallet.buildSignedPaymentTx({
-    privkeyWif: args['privkey-wif'],
+    privkeyWif,
     inputs,
     toPkhHex: args['to-pkh'],
     amountSats: Number(args['amount-sats']),

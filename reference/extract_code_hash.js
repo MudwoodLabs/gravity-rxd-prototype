@@ -74,6 +74,33 @@ function encodeBytesPush(hex) {
   throw new Error(`bytes push length ${len} not supported`);
 }
 
+// Find the first position where `opcode` appears as a real script opcode
+// (not as a byte inside a push-data region). Returns -1 if not found.
+// Handles 0x01..0x4b direct pushes, 0x4c OP_PUSHDATA1, 0x4d OP_PUSHDATA2,
+// 0x4e OP_PUSHDATA4, and treats all other bytes as 1-byte opcodes.
+function findOpcode(bytes, opcode) {
+  let i = 0;
+  while (i < bytes.length) {
+    const op = bytes[i];
+    if (op === opcode) return i;
+    if (op >= 0x01 && op <= 0x4b) {
+      i += 1 + op;
+    } else if (op === 0x4c) {
+      if (i + 1 >= bytes.length) break;
+      i += 2 + bytes[i + 1];
+    } else if (op === 0x4d) {
+      if (i + 2 >= bytes.length) break;
+      i += 3 + bytes.readUInt16LE(i + 1);
+    } else if (op === 0x4e) {
+      if (i + 4 >= bytes.length) break;
+      i += 5 + bytes.readUInt32LE(i + 1);
+    } else {
+      i += 1;
+    }
+  }
+  return -1;
+}
+
 function substitute(hexTemplate, params, abi) {
   const constructor = abi.find(x => x.type === 'constructor');
   if (!constructor) throw new Error('no constructor in ABI');
@@ -126,12 +153,10 @@ function main() {
   const fullHex = substitute(artifact.hex, params, artifact.abi);
   const fullBytes = Buffer.from(fullHex, 'hex');
 
-  // Find OP_STATESEPARATOR (0xbd). Use the FIRST occurrence — that's the
-  // language-level separator. Any 0xbd inside push data is not a separator.
-  // For this contract template, there are no long push-data sections that
-  // could contain 0xbd, so a first-match search is safe. For more complex
-  // contracts, a real byte-by-byte script walker is needed.
-  const sepIdx = fullBytes.indexOf(OP_STATESEPARATOR);
+  // Find OP_STATESEPARATOR (0xbd) as a real opcode — not as a byte inside
+  // push-data. A naive indexOf is unsafe because a short bytes20 push
+  // (takerRadiantPkh) has a ~7.6% chance of containing 0xbd in some byte.
+  const sepIdx = findOpcode(fullBytes, OP_STATESEPARATOR);
   if (sepIdx < 0) {
     console.error('OP_STATESEPARATOR (0xbd) not found in compiled bytecode');
     console.error('hex:', fullHex);
