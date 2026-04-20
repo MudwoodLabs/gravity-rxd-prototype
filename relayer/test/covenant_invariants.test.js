@@ -122,5 +122,23 @@ check('compiled hex is non-empty and reasonable size',
   hex.length > 6000 && hex.length < 20000,
   `got ${hex.length / 2} bytes`);
 
+// R1 regression test (2026-04-20). The generator must prepend 0x00 before
+// int() on the chunked PoW compare, otherwise Radiant's signed OP_BIN2NUM
+// treats a 4-byte push with sign bit set as negative — and `negative <
+// positive_target_chunk` is trivially true, so an attacker grinds ~2
+// nonces per header to bypass PoW entirely. Verified on mainnet (unpatched
+// probe: tx 8b83d0dcfee0e8823cb6b289b0b6d52068243245aacea252f31fbd6d966038fd
+// accepted; patched probe: same tx rejected mandatory-script-verify-flag).
+// Byte-level evidence: the 4-byte push at the chunk read should be followed
+// by an OP_PUSHBYTES_1 <00> concat (0x01 0x00 7e). 7e = OP_CAT on BCH/Radiant.
+const hasUnsignedCoercion = /010078/.test(hex) || /01007e/.test(hex);
+// Specifically search for the concat pattern that appends an 0x00 byte
+// before OP_BIN2NUM (0x81 on BCH/Radiant). The compiled pattern for
+// `bytes_expr + 0x00` then `int(...)` is "01 00 7e 81" (push 1-byte zero,
+// OP_CAT, OP_BIN2NUM).
+check('R1 fix: `+ 0x00` concat before OP_BIN2NUM (0x01007e81 sequence)',
+  /01007e81/.test(hex),
+  'sign-flip defense missing — attacker grinds ~2 nonces per header to bypass PoW');
+
 console.log(`\ncovenant-invariant tests: ${passed} passed, ${failed} failed, ${skipped} skipped`);
 process.exit(failed === 0 ? 0 : 1);

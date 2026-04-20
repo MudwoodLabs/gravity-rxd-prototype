@@ -70,17 +70,27 @@ function powBlock(i) {
     `bytes hBE${i} = hash${i}.reverse();`,
     `bytes tBE${i} = t${i}.reverse();`,
     ``,
+    // R1 defense: Radiant's `int()` compiles to OP_BIN2NUM which treats
+    // the byte sequence as a SIGNED scriptnum. A 4-byte hash chunk whose
+    // high byte has the MSB set (e.g., 0x80..0xFF) decodes as a negative
+    // number, and `negative < positive_target_chunk` is trivially true —
+    // so an attacker who grinds a header producing hash[0..4] >= 0x80000000
+    // BE wins the chunk-0 compare for free, regardless of PoW.
+    // Fix: prepend 0x00 to each chunk before int(). That makes it a
+    // 5-byte scriptnum whose sign byte is always 0 → always non-negative.
+    // Verified on mainnet (probe tx 8b83d0dc…38fd, 2026-04-20): without
+    // this fix, require(x < 0) passes with x = int(reverse(0x80000001)).
     ...[0, 1, 2, 3, 4, 5, 6, 7].map(k => {
       const src = k === 0 ? `hBE${i}.split(4)[0]` :
                   k === 7 ? `hBE${i}.split(28)[1]` :
                             `hBE${i}.split(${k * 4})[1].split(4)[0]`;
-      return `int h${i}c${k} = int(${src}.reverse());`;
+      return `int h${i}c${k} = int(${src}.reverse() + 0x00);`;
     }),
     ...[0, 1, 2, 3, 4, 5, 6, 7].map(k => {
       const src = k === 0 ? `tBE${i}.split(4)[0]` :
                   k === 7 ? `tBE${i}.split(28)[1]` :
                             `tBE${i}.split(${k * 4})[1].split(4)[0]`;
-      return `int t${i}c${k} = int(${src}.reverse());`;
+      return `int t${i}c${k} = int(${src}.reverse() + 0x00);`;
     }),
     ``,
     `bool pow${i} =`,

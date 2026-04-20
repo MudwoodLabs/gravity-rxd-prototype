@@ -238,3 +238,62 @@ is secure.
 The project's paper-level security model (§6, ~$428k/block forgery cost)
 assumes mainnet difficulty and structural tx-output parsing. The covenant
 doesn't enforce either.
+
+---
+
+## R1 (CRITICAL, post-Phase-10) — PoW chunked-compare sign-flip [2026-04-20]
+
+Found during the Phase-12 red-team pen-test sweep; verified on mainnet.
+
+**The bug:** The generator at `powBlock()` emitted `int h{i}c{k} = int(<4-byte
+slice>.reverse())`. Radiant's `int()` compiles to `OP_BIN2NUM`, which
+treats the byte sequence as a **signed scriptnum**. A 4-byte chunk whose
+byte-3 (last byte in LE) has the high bit set decodes as a negative value.
+
+For mainnet difficulty, target chunk 0 is `0` (the target's top 32 bits are
+always zero at current difficulty levels). An attacker who grinds a header
+nonce until `hash_BE[0..4] >= 0x80000000` (probability ½ per trial) produces
+`h0c0 = -X` for some positive X. The chunked-compare's short-circuit OR hits
+chunk 0 first: `(h0c0 < t0c0) = (-X < 0) = TRUE`. `pow_i` evaluates TRUE.
+No actual proof-of-work required. Per-header cost: ~2 grinds. For N=6 headers:
+~12 total grinds, under a second of CPU.
+
+**Impact:** complete bypass of the Phase-10 covenant's PoW check. An attacker
+could drain any Maker UTXO by forging a 6-header chain of fake headers,
+committing a fake Merkle root pointing at a fake payment, and constructing
+a valid-looking SPV proof. Cost: pennies.
+
+**Verified on Radiant mainnet (2026-04-20):**
+- Unpatched ProbeSignFlip spent via probe path passing `maliciousChunk = 0x80000001`:
+  tx `8b83d0dcfee0e8823cb6b289b0b6d52068243245aacea252f31fbd6d966038fd`
+  **ACCEPTED** — confirms `require(x < 0)` is reachable with attacker-controlled bytes.
+- Patched ProbeSignFlipFixed with identical input:
+  tx `35ea9c8f53b5163c5ae4c4ffb27686e3d90b6520069a11b05a88ca9cdcf47ca2`
+  **REJECTED** — `mandatory-script-verify-flag-failed (Script failed an OP_VERIFY operation)`.
+
+**Fix:** prepend a 0x00 byte before `int()` to force unsigned interpretation.
+5-byte scriptnums with top byte 0 always decode positive (`[b0, b1, b2, b3,
+0x00]` → 0 ≤ value ≤ 2³²−1).
+
+```
+- int h{i}c{k} = int(src.reverse());
++ int h{i}c{k} = int(src.reverse() + 0x00);
+```
+
+Applied to both hash chunks and target chunks in `generators/gen_maker_covenant.js`.
+Overhead: ~0.28 KB (+7%) on the 6×12 flat covenant; same per-chunk compare logic.
+
+**Why the original audit didn't catch it:** the five-specialist defensive
+audit (audit 03) reviewed `reference/validators.js` — which correctly uses
+`readUInt32BE` (unsigned) — and validated that the *algorithm* mirrored the
+covenant. Both passed the review. But the JS–covenant parity drifted at the
+scriptnum-semantics layer: `readUInt32BE` in JS ≠ `int(bytes)` in RadiantScript
+when the input has sign-bit set. The audit treated `int(bytes.reverse())` as
+the JS-equivalent unsigned decode; it's not. Corollary: **parity reviews must
+examine type-coercion semantics at the script-VM level, not just algorithm
+shape.**
+
+Regression test added to `relayer/test/covenant_invariants.test.js` — scans
+emitted bytecode for the `0x01007e81` pattern (`push 0x00`, `OP_CAT`,
+`OP_BIN2NUM`) that the fix produces, failing if any future refactor re-
+introduces the signed decode.
