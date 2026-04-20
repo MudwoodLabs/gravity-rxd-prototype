@@ -67,15 +67,27 @@ function buildFinalizeTx(opts) {
   const redeemScriptBuf = Buffer.from(redeemHex, 'hex');
   const redeemScript = rxd.Script.fromBuffer(redeemScriptBuf);
 
-  // Validate that outputOffset points at a valid P2PKH output in rawTx.
-  // Check prefix 0x1976a914 at offset+8 (value is 8 bytes before script).
+  // Validate that outputOffset points at a recognized output type in rawTx.
+  // Accepts P2PKH, P2WPKH, P2SH, P2TR (matches the multi-type covenant).
   const rawTxBuf = Buffer.from(spvProof.raw_tx, 'hex');
-  if (rawTxBuf.length < outputOffset + 34) {
+  if (rawTxBuf.length < outputOffset + 22) {
     throw new Error(`outputOffset ${outputOffset} beyond rawTx length ${rawTxBuf.length}`);
   }
-  const prefix = rawTxBuf.slice(outputOffset + 8, outputOffset + 12).toString('hex');
-  if (prefix !== '1976a914') {
-    throw new Error(`output at offset ${outputOffset} is not P2PKH: prefix=${prefix}, expected 1976a914`);
+  const prefix4 = rawTxBuf.slice(outputOffset + 8, outputOffset + 12).toString('hex');
+  const prefix3 = rawTxBuf.slice(outputOffset + 8, outputOffset + 11).toString('hex');
+  const knownPrefixes = {
+    '1976a914': 'P2PKH',
+    '160014':   'P2WPKH',
+    '17a914':   'P2SH',
+    '225120':   'P2TR',
+  };
+  const matched = knownPrefixes[prefix4] || knownPrefixes[prefix3];
+  if (!matched) {
+    throw new Error(
+      `output at offset ${outputOffset} is not a recognized payment type. ` +
+      `prefix(4)=${prefix4}, prefix(3)=${prefix3}. Expected one of: ` +
+      Object.entries(knownPrefixes).map(([k,v]) => `${v}=${k}`).join(', ')
+    );
   }
 
   // Assemble witnesses in the covenant's declared parameter order:

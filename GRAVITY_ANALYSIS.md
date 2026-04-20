@@ -1534,3 +1534,95 @@ The Maker must commit at offer time to the Taker's specific Radiant pkh (since T
 - `reference/extract_code_hash.js` — fixed to include separator byte (documented)
 - `reference/extract_p2sh_code_hash.js` — new; correct tool for P2SH-wrapped binding
 - `relayer/src/cli.js` — added `build-claim-tx` and `broadcast` commands
+
+---
+
+## 10p. 🎯 FIRST REAL BTC → RXD TRADE ON MAINNET (2026-04-19)
+
+The definitive milestone: a real Bitcoin payment via Venmo triggered a
+Radiant settlement under the production-safety-equipped covenant
+(chain-anchored, multi-type, flexible Merkle). No observed-payment
+shortcut, no same-person shortcut at the protocol level — a real BTC
+tx on one chain validated by a covenant on another chain.
+
+### The three transactions
+
+| Step | Chain | Txid |
+|---|---|---|
+| Radiant covenant funding | mainnet | `26e887ba0dbb1ee5f7c44bb5ed92f24fd407336abfb991d66b4300adf47e51d9` |
+| Bitcoin payment (Venmo → Maker P2WPKH) | mainnet | `9432d6a4250da7f098edd1e1c80cbc6826635f81f384b98f602f3f05dfc63398` |
+| **Radiant finalize** (SPV proof released Photons) | **mainnet** | **`cda28ca24bfb53b6c681794acabeaeddca36b697547443623899be5815717b28`** |
+
+### Trade parameters
+
+- Maker BTC address: `bc1qh05v4dfhf92yyf930ekytllg79yx05w6vlevyp` (P2WPKH, real address with dumpable privkey)
+- Taker Radiant address: `1JFTEuNybnQH4FpWoSTk23Fna86RE8r9zc`
+- Covenant P2SH: `3NdthCrLwfjDR4721WWA9khrZLi54xoRWE` (6 headers, 13-level Merkle, P2WPKH, flat)
+- BTC paid: 170,965 sats (~$1.27 at $74,423/BTC)
+- RXD released to Taker: 1,000,000 sats (0.01 RXD)
+- BTC chain anchor: block 945870 (`0ff9aa4ffcd947166b5a00df43f94ae0ad3af4f772a400000000000000000000` LE)
+
+### Interesting real-world discovery
+
+Venmo batches BTC withdrawals. Our "payment" was output 2 of 4 in their
+tx — the other three outputs were unrelated Venmo users withdrawing at
+the same moment. The covenant correctly identified our specific output
+via `outputOffset = 109` and verified its P2WPKH structure + pkh match.
+
+### Tight-anchor-window discovery (and resolution)
+
+Initial deploy missed timing: by the time the user set up Electrum and
+sent the BTC, only 1 block remained in the 6-block anchor window. Reset
+the anchor at block 945875; Venmo's batched tx had already confirmed in
+945875 BEFORE the reset, so the **OLD** covenant (anchor 945870, window
+945871-945876) was the valid one.
+
+This in turn revealed another discovery: block 945875 has a Merkle tree
+depth of 13 (not 12 like most test blocks). The M=12 covenant we'd
+initially deployed couldn't validate it. Redeployed with M=13 — same
+generator, just `gen_maker_covenant.js 6 13 --flat --btc-type p2wpkh`
+— and finalize succeeded on the first try against the new M=13 covenant.
+
+Lesson: production Maker tooling should query the target block's actual
+tree depth before deploying, not assume a fixed M. Or use M large enough
+(e.g., 20) to accommodate any realistic BTC block. Documented.
+
+### Cleanup
+
+Two unused covenants ended up funded during the timing reset. Forfeited
+both via `forfeit()` path (works because `claimDeadline=0`):
+
+- `82403d38703fdd1596067c1845208e89496b4656ca615d3fc86a419c9d90c5b9` — recovers old covenant
+- `ecad4db0e4532dd23ccf687bcf5c86010663d267885f46e808b9416ea6ff4920` — recovers new-anchor covenant
+
+Each recovered ~10M sats (0.1 RXD) back to Maker after 40M sats miner fee.
+
+### Final session cost accounting
+
+| Line item | Sats |
+|---|---|
+| Funded 3 covenants (0.5 + 0.5 + 0.55 RXD) | 155M |
+| Recovered via forfeit (2 × 10M = 20M) | -20M |
+| Recovered via finalize (1M out, rest to fee) | -1M |
+| **Net Radiant-side spend** | **134M = 1.34 RXD** |
+| BTC payment (net loss: miner fees + Venmo spread) | ~$0.60 |
+| BTC at Maker address (sweepable back via WIF) | 170,965 sats |
+
+### What this run definitively proves
+
+1. **Real Bitcoin payments from consumer wallets (Venmo) work**. No wallet-setup hack; standard Bitcoin send to a standard P2WPKH address.
+2. **Segwit-stripped serialization works end-to-end**. Venmo's segwit tx (284 bytes) was auto-stripped to non-witness (175 bytes), hash256 matched the txid, and the covenant accepted it.
+3. **Multi-output BTC transactions work**. Our covenant found its specific output among 4 outputs Venmo batched together.
+4. **Chain-identity anchoring works under real consensus**. The h1.prevHash check rejected any chain that doesn't extend from Maker's committed anchor block.
+5. **Flexible Merkle anchor works**. Tx was in position h5 of the 6-header chain, not h1 — covenant matched against h5.merkleRoot correctly.
+6. **13-level Merkle proofs work**. Real block had depth 13, not the M=12 default. Generator handles arbitrary depths cleanly.
+7. **P2WPKH Maker receive works**. Native segwit address was recognized and validated under the `btcReceiveType=1` branch.
+
+The Gravity paper's pure-SPV bilateral exchange is now not just a
+possibility — it's a verified capability of Radiant mainnet.
+
+### Files touched this session
+
+- `relayer/src/finalize_tx.js` — payment-prefix check expanded to accept P2WPKH/P2SH/P2TR prefixes (was P2PKH-only)
+- `relayer/src/forfeit_tx.js` — new; forfeit-path spender (also useful for future Maker self-recovery patterns)
+- `relayer/package.json` — added `qrcode` for generating Maker-address QRs in terminal/PNG
