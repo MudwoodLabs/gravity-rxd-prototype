@@ -20,7 +20,7 @@
  */
 
 const fs = require('fs');
-const rxd = require('/home/eric/apps/gravity-rxd-prototype/validation/node_modules/@radiant-core/radiantjs');
+const rxd = require('@radiant-core/radiantjs');
 
 function parseArgs() {
   const argv = process.argv.slice(2);

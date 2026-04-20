@@ -1,5 +1,15 @@
 # gravity-rxd-prototype
 
+> ⚠️ **Research prototype — do not hold value in this covenant.**
+>
+> A 2026-04-19 internal security review (see [`docs/audits/`](./docs/audits/))
+> found multiple independent paths to drain any Maker UTXO for pennies of
+> attacker cost, plus a shell-injection path on the operator's machine.
+> The successful mainnet trade (`cda28ca2…7b28`) worked because Maker and
+> Taker were cooperating. In an adversarial setting the protocol is **not
+> safe** as currently committed. Fixes are in progress — see the audit
+> reports for the findings and planned remediation.
+
 A working-code prototype of the [Gravity protocol](https://github.com/Radiant-Core/Project-Gravity) — peer-to-peer cross-chain exchange using SPV proofs and covenants on the [Radiant blockchain](https://www.radiantcore.org/).
 
 This repository contains RadiantScript contracts, code generators, and Node.js reference implementations for the core SPV verification primitives needed to implement pure-SPV Gravity without requiring any new Radiant consensus opcodes.

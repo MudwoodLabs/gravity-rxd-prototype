@@ -50,7 +50,7 @@ up where the work left off without re-reading the full development thread.
 
 2. **Upstream bug reports to Radiant-Core/RadiantScript**
    - 3 bugs documented in `UPSTREAM_BUGS.md`
-   - Branches staged locally at `/home/eric/apps/RadiantScript/`
+   - Branches staged locally in a working copy of RadiantScript
    - Trivial PRs, just need posting
 
 3. **REP draft** — formal Radiant Enhancement Proposal with measurements

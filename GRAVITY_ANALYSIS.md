@@ -250,7 +250,7 @@ Highest-leverage individual piece: the prototype (step 2). Exposes whether pure-
 
 ## 10a. First compiled measurements — 2026-04-18 (session work)
 
-**rxdc built from source** at `/home/eric/apps/RadiantScript/` after fixing two real bugs in the master/radiantscript branch:
+**rxdc built from source** from a working copy of RadiantScript after fixing two real bugs in the master/radiantscript branch:
 
 1. **Duplicate property keys** in `packages/cashc/src/generation/utils.ts` (lines 53-57 duplicated entries already present at lines 69-78). TypeScript compile error. [See local repo for fix.]
 2. **Undefined opcodes** `OP_BLAKE3` and `OP_K12` referenced but not defined in `Op` or `RadiantOp` enums. Patched locally with `[] as any` stub + TODO. Upstream needs to either add opcodes to `RadiantOp` enum in `packages/utils/src/script.ts` or remove from `GlobalFunction` enum.
