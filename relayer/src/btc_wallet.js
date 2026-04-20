@@ -115,11 +115,20 @@ function generateKeypair() {
 }
 
 async function getUtxos(address) {
-  // Restrict to Bitcoin address charset + the bech32/bech32m separator '1'.
-  // This covers P2PKH (Base58Check, 1...), P2SH (3...), P2WPKH/P2WSH (bc1q...),
-  // P2TR (bc1p...). Rejects anything containing /, ?, #, %, etc. that could
-  // pivot the URL path or inject query strings.
-  if (typeof address !== 'string' || !/^(1|3|bc1)[a-zA-HJ-NP-Z0-9]{20,99}$/.test(address)) {
+  // Restrict to actual Bitcoin address shapes. Two forms:
+  //   * Base58Check (P2PKH `1…`, P2SH `3…`): charset excludes 0/O/I/l and
+  //     lower/upper mixed is legal per encoding.
+  //   * bech32/bech32m (P2WPKH `bc1q…`, P2WSH, P2TR `bc1p…`): charset is
+  //     0-9a-z only — BIP173 specifies all-lowercase or all-uppercase, never
+  //     mixed. We enforce lowercase for on-the-wire Maker addresses because
+  //     mempool.space itself rejects mixed-case and most wallets emit
+  //     lowercase. Uppercase is available via wallets; callers who need it
+  //     can lowercase before passing in.
+  // Rejects anything containing /, ?, #, %, etc. that could pivot the URL
+  // path or inject query strings.
+  const isBase58 = /^[13][1-9A-HJ-NP-Za-km-z]{20,34}$/.test(address);
+  const isBech32 = /^bc1[02-9ac-hj-np-z]{20,87}$/.test(address);
+  if (typeof address !== 'string' || !(isBase58 || isBech32)) {
     throw new Error(`address is not a recognized mainnet format: ${JSON.stringify(address)}`);
   }
   const res = await fetch(`${MEMPOOL_API}/address/${encodeURIComponent(address)}/utxo`);

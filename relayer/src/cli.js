@@ -53,9 +53,15 @@ function requireInt(val, name, opts = {}) {
   if (val === undefined || val === null || val === '') {
     console.error(`--${name} required`); process.exit(2);
   }
+  // Stringify-display helper: `JSON.stringify(NaN)` returns `"null"` which
+  // is confusing inside the "got X" context; fall back to String(val).
+  const display = (v) => {
+    if (typeof v === 'number' && !Number.isFinite(v)) return String(v);
+    try { return JSON.stringify(v); } catch { return String(v); }
+  };
   const n = parseInt(val, 10);
   if (!Number.isInteger(n) || !Number.isSafeInteger(n) || String(n) !== String(val).trim()) {
-    console.error(`--${name} must be a decimal integer (got ${JSON.stringify(val)})`);
+    console.error(`--${name} must be a decimal integer (got ${display(val)})`);
     process.exit(2);
   }
   if (n < min || n > max) {
@@ -150,10 +156,7 @@ async function cmdFetchSpvProof() {
   if (!/^[0-9a-fA-F]{64}$/.test(args.txid)) {
     console.error('--txid must be 64 hex chars'); process.exit(2);
   }
-  const N = parseInt(args.headers || '6', 10);
-  if (!Number.isInteger(N) || N < 1 || N > 200) {
-    console.error('--headers must be an integer in [1, 200]'); process.exit(2);
-  }
+  const N = requireInt(args.headers || '6', 'headers', { min: 1, max: 200 });
 
   const meta = await btc.getTxMeta(args.txid);
   if (!meta.status || !meta.status.confirmed) {
@@ -188,10 +191,7 @@ async function cmdFetchSpvProof() {
   // any header.
   let startHeight;
   if (args['anchor-height'] !== undefined) {
-    const anchorHeight = parseInt(args['anchor-height'], 10);
-    if (!Number.isInteger(anchorHeight) || anchorHeight < 0) {
-      console.error('--anchor-height must be a non-negative integer'); process.exit(2);
-    }
+    const anchorHeight = requireInt(args['anchor-height'], 'anchor-height', { min: 0 });
     startHeight = anchorHeight + 1;
     if (txBlockHeight < startHeight || txBlockHeight > startHeight + N - 1) {
       console.error(
@@ -225,10 +225,7 @@ async function cmdFetchSpvProof() {
   // will split past the end of the branch and fail with an opaque error.
   // Accept --merkle-depth M to reject mismatches up-front.
   if (args['merkle-depth'] !== undefined) {
-    const expectedDepth = parseInt(args['merkle-depth'], 10);
-    if (!Number.isInteger(expectedDepth) || expectedDepth < 1 || expectedDepth > 20) {
-      console.error('--merkle-depth must be an integer in [1, 20]'); process.exit(2);
-    }
+    const expectedDepth = requireInt(args['merkle-depth'], 'merkle-depth', { min: 1, max: 20 });
     if (mp.merkle.length !== expectedDepth) {
       console.error(
         `merkle branch depth mismatch: mempool returned ${mp.merkle.length} ` +
@@ -367,10 +364,7 @@ async function cmdFetchSpvProof() {
     if (!/^[0-9a-fA-F]+$/.test(args['btc-receive-hash'])) {
       console.error('--btc-receive-hash must be hex'); process.exit(2);
     }
-    const sats = parseInt(args['btc-satoshis'], 10);
-    if (!Number.isInteger(sats) || sats < 0) {
-      console.error('--btc-satoshis must be a non-negative integer'); process.exit(2);
-    }
+    const sats = requireInt(args['btc-satoshis'], 'btc-satoshis', { min: 0 });
     const type = args['btc-receive-type'];
     if (!validators.PAYMENT_TYPES[type]) {
       console.error(`--btc-receive-type must be one of: ${Object.keys(validators.PAYMENT_TYPES).join('|')}`); process.exit(2);
