@@ -6,9 +6,15 @@
  *   output[0] is P2PKH to makerPkh
  *   output[0].value >= totalPhotonsInOutput
  *
- * For claimDeadline=0, the time check is trivially satisfied. Note
- * OP_CHECKLOCKTIMEVERIFY requires the input's sequenceNumber to be
- * less than 0xFFFFFFFF; we use 0xFFFFFFFE.
+ * The covenant now rejects claimDeadline < 1735686400 (2025-01-01) so the
+ * forfeit path can never be open from block 1 — this closes the
+ * finalize/forfeit race that audit 04 flagged as the biggest game-theoretic
+ * defect (S1). Takers must allow enough time for BTC to confirm + SPV
+ * proof generation + Radiant finalization before claimDeadline, typically
+ * 24+ hours.
+ *
+ * OP_CHECKLOCKTIMEVERIFY requires the input's sequenceNumber to be less
+ * than 0xFFFFFFFF; we use 0xFFFFFFFE.
  *
  * scriptSig layout: <selector=1 (OP_1)> <redeem script>
  */
@@ -17,8 +23,21 @@ const rxd = require('@radiant-core/radiantjs');
 
 function buildForfeitTx({
   redeemHex, fundingTxid, fundingVout, fundingAmount,
-  makerAddress, feeSats,
+  makerAddress, feeSats, claimDeadline,
 }) {
+  if (claimDeadline === undefined || claimDeadline === null) {
+    throw new Error(
+      'claimDeadline required — forfeit tx must set nLockTime >= the ' +
+      'covenant\'s claimDeadline for OP_CHECKLOCKTIMEVERIFY to pass.'
+    );
+  }
+  const now = Math.floor(Date.now() / 1000);
+  if (claimDeadline > now) {
+    throw new Error(
+      `claimDeadline ${claimDeadline} is ${claimDeadline - now}s in the ` +
+      `future; forfeit cannot run yet`
+    );
+  }
   const redeemScriptBuf = Buffer.from(redeemHex, 'hex');
   const redeemScript = rxd.Script.fromBuffer(redeemScriptBuf);
 
@@ -48,7 +67,10 @@ function buildForfeitTx({
   tx.inputs[0].setScript(scriptSig);
   // Must be < 0xFFFFFFFF for OP_CHECKLOCKTIMEVERIFY to pass
   tx.inputs[0].sequenceNumber = 0xFFFFFFFE;
-  tx.nLockTime = 0;  // satisfies require(tx.time >= 0)
+  // nLockTime must be >= claimDeadline for the covenant's
+  // require(tx.time >= claimDeadline) to pass. Use claimDeadline itself —
+  // no reason to lock further out.
+  tx.nLockTime = claimDeadline;
 
   const txHex = tx.serialize({ disableAll: true });
   const txBytes = Buffer.from(txHex, 'hex');

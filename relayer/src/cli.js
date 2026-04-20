@@ -281,7 +281,7 @@ async function cmdValidateProof() {
 async function cmdBuildFinalizeTx() {
   const args = parseArgs();
   const required = ['spv-proof', 'redeem-hex', 'funding-txid', 'funding-vout',
-                    'funding-amount', 'output-offset', 'to-address', 'fee-sats'];
+                    'funding-amount', 'to-address', 'fee-sats'];
   const missing = required.filter(k => !args[k]);
   if (missing.length) {
     console.error(`missing required args: ${missing.join(', ')}`);
@@ -304,7 +304,6 @@ async function cmdBuildFinalizeTx() {
     fundingTxid: args['funding-txid'],
     fundingVout: Number(args['funding-vout']),
     fundingAmount: Number(args['funding-amount']),
-    outputOffset: Number(args['output-offset']),
     toAddress: args['to-address'],
     feeSats: Number(args['fee-sats']),
   });
@@ -335,6 +334,10 @@ async function cmdBuildClaimTx() {
     process.exit(2);
   }
 
+  // MakerOffer.claim() now requires a Taker signature — pass the WIF via
+  // --privkey-file (preferred) or --privkey-wif (opt-in, argv-leaky).
+  const takerPrivkeyWif = loadPrivkey(args);
+
   // Allow --claimed-redeem-hex and --offer-redeem-hex to accept either literal
   // hex or a file path containing hex.
   function readHex(v) {
@@ -348,6 +351,7 @@ async function cmdBuildClaimTx() {
     offerFundingAmount: Number(args['offer-funding-amount']),
     claimedRedeemHex: readHex(args['claimed-redeem-hex']),
     feeSats: Number(args['fee-sats']),
+    takerPrivkeyWif,
   });
 
   console.log(`=== claim() tx ===`);

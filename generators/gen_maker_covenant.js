@@ -49,8 +49,19 @@ function powBlock(i) {
   return [
     `// --- PoW check: ${H} ---`,
     `bytes n${i} = ${H}.split(72)[1].split(4)[0];`,
+    // Bound on nBits: must match the difficulty Maker committed to at
+    // deploy time. Without this, an attacker who authors a header can set
+    // nBits to a trivial target (e.g. 0xffffff20, target ≈ 2^256 × 0.9999)
+    // and satisfy the covenant with seconds of CPU — audit 03 finding C1.
+    // Bitcoin retargets every 2016 blocks (~2 weeks); Makers must update
+    // expectedNBits at most once per retarget window.
+    `require(n${i} == expectedNBits);`,
     `bytes m${i} = n${i}.split(3)[0];`,
     `int e${i} = int(n${i}.split(3)[1]);`,
+    // nBits-exponent bound guards against corrupt values. Must be in [3,32]
+    // for the zero-padding to produce a valid 32-byte target.
+    `require(e${i} >= 3);`,
+    `require(e${i} <= 32);`,
     `bytes t${i} = bytes(0, e${i} - 3) + m${i} + bytes(0, 32 - e${i});`,
     ``,
     `bytes32 hash${i} = hash256(${H});`,
@@ -237,6 +248,7 @@ if (flat) {
   if (includeTypeParam) lines.push(`    int btcReceiveType,`);
   lines.push(`    int btcSatoshis,`);
   lines.push(`    bytes32 btcChainAnchor,     // hash256 of a known mainnet block; h1.prevHash must equal this`);
+  lines.push(`    bytes4 expectedNBits,       // Bitcoin difficulty (LE); every header must match — prevents trivial-target forgery`);
   lines.push(`    int claimDeadline,`);
   lines.push(`    int totalPhotonsInOutput`);
   lines.push(`) {`);
@@ -253,6 +265,7 @@ if (flat) {
   if (includeTypeParam) lines.push(`    int btcReceiveType,`);
   lines.push(`    int btcSatoshis,`);
   lines.push(`    bytes32 btcChainAnchor,     // hash256 of a known mainnet block; h1.prevHash must equal this`);
+  lines.push(`    bytes4 expectedNBits,       // Bitcoin difficulty (LE); every header must match — prevents trivial-target forgery`);
   lines.push(`    int totalPhotonsInOutput`);
   lines.push(`) function(`);
   lines.push(`    bytes20 takerRadiantPkh,`);
@@ -261,7 +274,11 @@ if (flat) {
   lines.push(`    // Grammar requires at least one statement before stateSeparator.`);
   lines.push(`    // Use trivially-true requires that reference both state params.`);
   lines.push(`    require(takerRadiantPkh.length == 20);`);
-  lines.push(`    require(claimDeadline >= 0);`);
+  lines.push(`    // claimDeadline must be a real future timestamp. 0 (or any small`);
+  lines.push(`    // value) would make forfeit() immediately spendable alongside`);
+  lines.push(`    // finalize(), letting the Maker race-snipe the Taker's claim —`);
+  lines.push(`    // see audit 04 finding S1. Minimum: Unix 1735686400 = 2025-01-01.`);
+  lines.push(`    require(claimDeadline >= 1735686400);`);
   lines.push(``);
   lines.push(`    stateSeparator;`);
   lines.push(``);
@@ -270,7 +287,10 @@ if (flat) {
 
 // finalize function signature: accepts N headers, M×33-byte branch, rawTx, outputOffset
 const headerParams = Array.from({ length: N }, (_, i) => `bytes h${i + 1}`).join(', ');
-lines.push(`        finalize(${headerParams}, bytes branch, bytes rawTx, int outputOffset) {`);
+// finalize() signature: outputOffset was removed as an unlocking arg (audit
+// 03 finding C2). Instead the covenant constrains the tx structure and
+// computes the offset itself — see the "structural tx layout" block below.
+lines.push(`        finalize(${headerParams}, bytes branch, bytes rawTx) {`);
 
 // Chain-identity anchor: verify h1's prevHash matches a Maker-committed
 // hash of a known mainnet block. This is the network-identity guarantee —
@@ -280,6 +300,39 @@ lines.push(indent([
   `// --- Chain-identity anchor: h1 must extend from a known mainnet block ---`,
   `bytes h1Prev = h1.split(4)[1].split(32)[0];`,
   `require(h1Prev == btcChainAnchor);`,
+  ``,
+]));
+
+// Structural tx-layout constraint (audit 03 C2). The covenant must not
+// trust an attacker-supplied outputOffset. Instead require the rawTx to
+// follow a fixed 1-input segwit layout (common for modern Taker wallets)
+// so output[0] lands at a known, hardcoded offset.
+//
+// After witness-stripping, a 1-input segwit (P2WPKH / P2TR) tx looks like:
+//   4B version | 01 inputCount | 36B outpoint | 00 empty-scriptSig-len
+//   | 4B sequence | varint outputCount | output[0] | ...
+//                                       ^ starts at byte 47 (if outputCount
+//                                         is 1-byte / < 0xFD outputs)
+//
+// Also require rawTx length > 64 — a 64-byte tx is indistinguishable from
+// a pair of concatenated 32-byte Merkle nodes (audit 02 finding 1).
+lines.push(indent([
+  `// --- Tx-structure constraint (forces known output offset) ---`,
+  `// Byte layout (post-witness-strip, 1-input segwit):`,
+  `//   [0..4)   version`,
+  `//   [4]      inputCount   — require == 0x01`,
+  `//   [5..41)  outpoint (36)`,
+  `//   [41]     scriptSigLen — require == 0x00 (empty = segwit)`,
+  `//   [42..46) sequence (4)`,
+  `//   [46]     outputCount  — require < 0xfd (fits in 1 byte)`,
+  `//   [47..)   output[0]`,
+  `require(rawTx.length > 64);`,
+  `require(rawTx.split(4)[1].split(1)[0] == 0x01);`,
+  `require(rawTx.split(41)[1].split(1)[0] == 0x00);`,
+  `require(rawTx.split(46)[1].split(1)[0] != 0xfd);`,
+  `require(rawTx.split(46)[1].split(1)[0] != 0xfe);`,
+  `require(rawTx.split(46)[1].split(1)[0] != 0xff);`,
+  `int outputOffset = 47;`,
   ``,
 ]));
 

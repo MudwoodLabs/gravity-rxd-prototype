@@ -56,13 +56,20 @@ node /path/to/RadiantScript/packages/cashc/dist/main/cashc-cli.js \
   contracts/maker_covenant_trade.rxd \
   -o validation/maker_covenant_trade.artifact.json
 
-# Compute the expected P2SH commitment for MakerOffer
+# Compute the expected P2SH commitment for MakerOffer.
+#
+# claimDeadline MUST be a future Unix timestamp — the covenant rejects
+# values < 1735686400 (2025-01-01) so the finalize/forfeit race cannot
+# start from block 1. Recommended: now + 24 hours.
+CLAIM_DEADLINE=$(( $(date +%s) + 86400 ))
 node reference/extract_p2sh_code_hash.js validation/maker_covenant_trade.artifact.json \
   makerPkh=<maker's Radiant pkh> \
   takerRadiantPkh=<taker's Radiant pkh (from step 2)> \
   btcReceivePkh=<maker's BTC pkh (from step 1)> \
   btcSatoshis=<agreed BTC price in sats> \
-  claimDeadline=0 \
+  btcChainAnchor=<hash256 of anchor-block's 80B header, LE hex> \
+  expectedNBits=<current Bitcoin nBits LE, e.g. 17030dd8> \
+  claimDeadline=$CLAIM_DEADLINE \
   totalPhotonsInOutput=<Photons Maker is offering>
 
 # → prints expectedClaimedCodeHash (32-byte hex)
@@ -86,7 +93,10 @@ radiant-cli sendtoaddress <MakerOffer P2SH> <photons + fee margin>
 ### 5. Taker claims (creates MakerClaimed UTXO)
 
 ```bash
+# MakerOffer.claim() now requires a Taker signature — pass the Taker's
+# WIF via --privkey-file to avoid argv exposure.
 node src/cli.js build-claim-tx \
+  --privkey-file taker-radiant-keys.json \
   --offer-redeem-hex <path to instantiated MakerOffer hex> \
   --offer-funding-txid <maker's funding tx> \
   --offer-funding-vout 0 \
@@ -163,34 +173,38 @@ curl -s "https://mempool.space/api/tx/<btc_payment_txid>/status"
 
 ### 8. Fetch SPV proof
 
+The covenant requires h1.prevHash to equal the anchor the Maker committed
+to at deploy time. Pass `--anchor-height` (the block BEFORE h1) and
+`--anchor-hash` (the hash256 of that anchor block's 80-byte header, LE
+hex) so the relayer verifies alignment before emitting the proof.
+
 ```bash
 node src/cli.js fetch-spv-proof \
   --txid <btc_payment_txid> \
-  --headers 6 > spv-proof.json
+  --headers 6 \
+  --anchor-height <H-from-maker> \
+  --anchor-hash <anchor-hash-from-maker> \
+  > spv-proof.json
 
-# Verify:
-jq '.merkle_root_matches, .raw_tx_hashes_to_txid' spv-proof.json
-# → both must be `true`
+# Verify every invariant passes:
+jq '.merkle_root_matches, .raw_tx_hashes_to_txid, .validation' spv-proof.json
+# → merkle_root_matches: true
+# → raw_tx_hashes_to_txid: true
+# → validation.chain_pow_and_link: true
+# → validation.chain_anchor:       true
 ```
 
-### 9. Find the P2PKH output offset in the BTC raw tx
+### 9. (No offset needed)
 
-Pass through the SPV proof JSON:
-```bash
-node -e "
-const p = require('./spv-proof.json');
-const buf = Buffer.from(p.raw_tx, 'hex');
-const targetPkh = '$(jq -r .pkh_hex maker-btc-keys.json)';
-for (let o = 0; o < buf.length - 34; o++) {
-  const pk = buf.slice(o + 8, o + 12).toString('hex');
-  const ph = buf.slice(o + 12, o + 32).toString('hex');
-  if (pk === '1976a914' && ph === targetPkh) {
-    console.log('output offset:', o);
-    break;
-  }
-}
-"
-```
+The covenant no longer accepts a Taker-chosen outputOffset — it enforces
+a fixed 1-input segwit tx layout and hardcodes outputOffset=47. **The
+Taker MUST**:
+
+1. Use a single segwit (P2WPKH or P2TR) UTXO as the BTC input.
+2. Place the Maker's payment as output[0].
+
+If either constraint is violated, the covenant rejects and Taker's BTC
+is gone without recovery.
 
 ### 10. Taker finalizes (collects Photons)
 
@@ -201,7 +215,6 @@ node src/cli.js build-finalize-tx \
   --funding-txid <claim tx from step 5> \
   --funding-vout 0 \
   --funding-amount <sats in MakerClaimed UTXO> \
-  --output-offset <from step 9> \
   --to-address <taker Radiant address from step 2> \
   --fee-sats 48000000 > finalize-tx.txt
 

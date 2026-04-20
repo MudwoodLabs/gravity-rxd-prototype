@@ -1,22 +1,33 @@
 /**
- * Build the Radiant claim() spending tx: spend MakerOfferSimple and
- * create a MakerClaimed UTXO at a specific P2SH address.
+ * Build the Radiant claim() spending tx: spend MakerOffer and create a
+ * MakerClaimed UTXO at a specific P2SH address.
  *
- * claim() scriptSig: <selector=1> <redeem script>
- * No signature required — claim is permissionless; anyone can claim by
- * creating an output meeting the value threshold.
+ * Requires Taker's privkey to produce a signature satisfying
+ * MakerOffer.claim(sig takerSig) — prevents third-party state-advance
+ * grief (audit 04 finding S3).
+ *
+ * claim() scriptSig: <takerSig+hashtype> <selector=1 = OP_1> <redeem script>
  *
  * Output[0]: P2SH wrapping the full MakerClaimed locking script, with
- * value = fundingAmount - feeSats. Must be >= MakerOfferSimple's
- * photonsOffered or claim will fail on-chain.
+ * value = fundingAmount - feeSats. Must be >= MakerOffer's
+ * totalPhotonsInOutput or claim will fail on-chain.
  */
 
 const rxd = require('@radiant-core/radiantjs');
 
 function buildClaimTx({
   offerRedeemHex, offerFundingTxid, offerFundingVout, offerFundingAmount,
-  claimedRedeemHex, feeSats,
+  claimedRedeemHex, feeSats, takerPrivkeyWif,
 }) {
+  if (!takerPrivkeyWif) {
+    throw new Error(
+      'takerPrivkeyWif required — MakerOffer.claim() now requires a ' +
+      'Taker signature. Pass --taker-privkey-file to the CLI.'
+    );
+  }
+
+  const privKey = new rxd.PrivateKey(takerPrivkeyWif);
+
   const offerRedeemBuf = Buffer.from(offerRedeemHex, 'hex');
   const offerRedeem = rxd.Script.fromBuffer(offerRedeemBuf);
 
@@ -42,11 +53,19 @@ function buildClaimTx({
   tx.from(utxo);
   tx.to(claimedP2SHAddress, outputAmount);
 
-  // scriptSig: <selector=1 = OP_1> <offer redeem script>
-  // OP_1 is a single-byte opcode (0x51), emitted by Script.empty().add(1) or
-  // by using radiantjs's Opcode.OP_1 directly. Easiest: use add() with a
-  // number, which radiantjs interprets as a minimal-int push.
+  // Sign input 0 over the redeem script (legacy P2SH sighash).
+  const sighashType =
+    rxd.crypto.Signature.SIGHASH_ALL | rxd.crypto.Signature.SIGHASH_FORKID;
+  const sigBuf = rxd.Transaction.Sighash.sign(
+    tx, privKey, sighashType, 0, offerRedeem, new rxd.crypto.BN(offerFundingAmount),
+  );
+  const sigWithHashtype = Buffer.concat([sigBuf.toBuffer(), Buffer.from([sighashType])]);
+
+  // scriptSig: <takerSig> <selector=1 = OP_1> <offer redeem script>
+  // Selector is the claim() function index (claim is index 1 — the second
+  // function after cancel).
   const scriptSig = rxd.Script.empty()
+    .add(sigWithHashtype)
     .add(rxd.Opcode.OP_1)
     .add(offerRedeemBuf);
 

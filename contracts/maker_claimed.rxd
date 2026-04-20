@@ -32,7 +32,11 @@ contract MakerClaimed(
     // Grammar requires at least one statement before stateSeparator.
     // Use a trivially-true require that references both state params.
     require(takerRadiantPkh.length == 20);
-    require(claimDeadline >= 0);
+    // claimDeadline must be a real future timestamp. 0 (or any small value)
+    // would make forfeit() immediately spendable alongside finalize(),
+    // letting the Maker race-snipe the Taker's claim — see audit 04 finding
+    // S1. Minimum: Unix 1735686400 = 2025-01-01.
+    require(claimDeadline >= 1735686400);
 
     stateSeparator;
 
