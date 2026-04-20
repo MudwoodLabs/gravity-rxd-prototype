@@ -1724,3 +1724,93 @@ Every Phase-3 → Phase-10 hardening item, exercised against real consensus:
 - Run-1 47M photons recoverable via `forfeit()` after 2026-04-21 08:35 UTC. Not wired into `cli.js` yet; will run directly via `forfeit_tx.js` + `sendrawtransaction`.
 - S1 race (audit 04) remains architecturally bounded by RadiantScript's time model — see `docs/S1_TIME_MODEL_LIMITATION.md`. Safe under documented honest-tooling + Taker re-verification discipline; not safe for adversarial public deployment without SPV-oracle forfeit (Phase A future work) or Radiant consensus OP_BLOCKTIME (Phase B, out-of-repo).
 - F-7 (mempool.space single-source trust) unchanged. Future work: multi-source oracle quorum.
+
+## 10r. 🚨 R1 FOUND + FIXED + RETESTED (2026-04-20, same-day)
+
+After documenting §10q, we ran a Phase-12 red-team pen-test sweep (6
+specialists with adversarial framing) and one of them flagged a potential
+protocol-breaking issue in the PoW-chunked-compare logic. The find turned
+out to be real, and was the single most significant vulnerability of the
+whole audit program.
+
+### The bug
+
+`generators/gen_maker_covenant.js::powBlock()` emitted per-chunk decodes as
+`int h{i}c{k} = int(<4B slice>.reverse());`. RadiantScript's `int()`
+compiles to `OP_BIN2NUM` — which treats the byte sequence as a **signed
+scriptnum**. A 4-byte chunk whose byte-3 (last byte in LE) has MSB set
+decodes as a negative number. For mainnet difficulty, target chunk 0 is
+`0`, so `(negative) < 0` is trivially true on the chunked-compare's first
+short-circuit branch. An attacker grinds ~2 nonces per header until
+`hash_BE[0..4] ≥ 0x80000000`; 12 total grinds for N=6 headers — under a
+second of CPU. **PoW completely bypassed.**
+
+The JS `reference/validators.js` used `readUInt32BE` — unsigned — and the
+previous five-specialist defensive audit confirmed algorithmic parity
+between JS and covenant. Both "agreed" on the math, but the scriptnum-
+decode layer silently diverged from the JS uint32 decode. The audit never
+examined type-coercion semantics at the script-VM level.
+
+### Mainnet proof
+
+Built a minimal `ProbeSignFlip` covenant that exposes just
+`require(int(chunk.reverse()) < 0)`. Funded with 0.2 RXD.
+
+- **Unpatched probe** — passed `maliciousChunk = 0x80000001` (reverses to
+  LE bytes `[0x01, 0x00, 0x00, 0x80]`, scriptnum value −1):
+  `sendrawtransaction` → `8b83d0dcfee0e8823cb6b289b0b6d52068243245aacea252f31fbd6d966038fd` accepted.
+- **Patched probe** (identical contract but with `+ 0x00` concat before `int()`):
+  same input → `mandatory-script-verify-flag-failed`, tx
+  `35ea9c8f53b5163c5ae4c4ffb27686e3d90b6520069a11b05a88ca9cdcf47ca2` rejected.
+
+### The fix
+
+```
+- int h{i}c{k} = int(src.reverse());
++ int h{i}c{k} = int(src.reverse() + 0x00);
+```
+
+Prepending a 0x00 byte yields a 5-byte scriptnum with top byte 0 — always
+non-negative, range `[0, 2³²)`. Applied to both hash chunks and target
+chunks in `generators/gen_maker_covenant.js`. Overhead: +288 bytes, +7%.
+
+Compiled pattern in bytecode: `01 00 7e 81` (push-1-byte-zero, OP_CAT,
+OP_BIN2NUM). A regression test in
+`relayer/test/covenant_invariants.test.js` scans for this pattern and fails
+if any future refactor re-introduces signed chunked decode.
+
+### Retested: clean mainnet trade on the patched covenant
+
+- MakerOffer (0.7 RXD): `2ed95f32858a4da5025ea91c4d75fd9381c46e4b34e0e0a01092a40be58b7729`
+- Claim: `5caeb40a1a13ffa26cd441c837ba696062f4085dc90359323a33987a1db98a95`
+- BTC payment: `08cbbbafad1bad935a1670323da0a3088f2388eb23cb474ba9fff884a3839f0a` (block 945954 = h2 of anchor window)
+- Finalize: `db4bd555a447f66d99d1da358d17a584f653c60748357af50d299122913133bd` (13M photons routed to Taker)
+
+The patched covenant is the first Gravity deployment that is
+**cryptographically defensible** — not just "worked because nobody
+attacked during the anchor window."
+
+### What this means for prior trades
+
+All three pre-R1-fix mainnet trades (the original `cda28ca2…7b28` from the
+Venmo trade, and the two self-trade runs documented in §10q) executed
+against covenants with the signed-decode bug. They completed honestly
+because no one attacked during their ~1-hour anchor windows. Retroactively:
+each of those was drainable for ~$0 of CPU by anyone who observed the
+covenant's P2SH on-chain.
+
+### Lessons
+
+- **Parity reviews must examine script-VM type coercion, not just
+  algorithmic shape.** `readUInt32BE` ≢ `int(bytes)` when the input has
+  sign-bit set. The five-specialist audit assumed algorithmic agreement
+  implied semantic agreement; it didn't.
+- **Adversarial red-team passes find what defensive reviews miss.** The
+  same covenant got clean reports from five defensive reviewers; one
+  adversarial pen-tester caught the bug in one reading. Different framing,
+  different attention.
+- **Live use catches things pure review can't.** Our run-1 shakedown
+  found the `--redeem-hex` file-path bug; this pen-test caught the
+  sign-flip; the covenant_invariants regression test would have caught it
+  too but only if someone thought to write the specific assertion. Stay
+  humble about the limits of "all tests green."
