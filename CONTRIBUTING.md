@@ -66,8 +66,8 @@ See [`HANDOFF.md`](./HANDOFF.md) §"Environment setup".
 Short version:
 ```bash
 git clone https://github.com/Zyrtnin-org/gravity-rxd-prototype.git
-cd gravity-rxd-prototype/relayer && npm install
-cd ../validation && npm install
+cd gravity-rxd-prototype/relayer && npm ci
+cd ../validation && npm ci
 ```
 
 Plus you'll need the `rxdc` RadiantScript compiler built from source —

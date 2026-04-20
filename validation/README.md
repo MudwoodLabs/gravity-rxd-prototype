@@ -9,7 +9,7 @@ args). Other covenants can be added by parameterizing `compute_address.js`.
 
 ## Prerequisites
 
-- Node 18+, `npm install` in this directory
+- Node 18+, `npm ci` in this directory (pinned lockfile)
 - A Radiant wallet with a small amount of photons (a few thousand is enough —
   cost on mainnet is low; each full round-trip costs on the order of
   10k photons in fees)

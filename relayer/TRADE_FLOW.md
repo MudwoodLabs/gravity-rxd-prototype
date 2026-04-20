@@ -9,7 +9,7 @@ only their own side.
 
 - Radiant wallet with some RXD (Maker locks Photons; Taker receives Photons)
 - Bitcoin wallet or coins (Taker pays BTC; Maker receives BTC)
-- Node 18+, `npm install` in `relayer/`
+- Node 18+, `npm ci` in `relayer/` (the repo pins exact versions)
 
 ## Role summary (BTC → RXD direction)
 

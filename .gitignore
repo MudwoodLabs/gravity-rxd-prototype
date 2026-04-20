@@ -9,6 +9,7 @@ build/
 # Compiled artifacts (regenerate from source)
 *.json
 !package.json
+!package-lock.json
 !*.artifact.json
 
 # Editor

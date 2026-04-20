@@ -101,15 +101,21 @@ You'll need this path in commands throughout the repo.
 
 ```bash
 cd ~/apps/gravity-rxd-prototype/relayer
-npm install
+npm ci                   # use `npm ci`, not `npm install` — respects the lockfile
 ```
 
 ### Install validation deps (for extract_p2sh_code_hash.js etc.)
 
 ```bash
 cd ../validation
-npm install
+npm ci
 ```
+
+Use `npm ci` (not `npm install`) on every fresh clone. The repo pins exact
+versions of security-critical deps (`@radiant-core/radiantjs`, `bitcoinjs-
+lib`, `ecpair`, `tiny-secp256k1`) and the lockfile records every transitive.
+`npm install` can still drift transitively; `npm ci` reproduces the
+install exactly.
 
 ## Current artifacts you may need
 

@@ -22,7 +22,7 @@ Not yet implemented (scope for later sessions):
 
 ```bash
 cd relayer
-npm install
+npm ci   # use npm ci (not npm install) — respects the pinned lockfile
 ```
 
 ## Commands

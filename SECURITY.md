@@ -42,6 +42,18 @@ Out of scope (known):
 - General SPV-inherent concerns (CVE-2012-2459, 64-byte tx ambiguity) if
   the covenant-side mitigations are already queued.
 
+## Known transitive advisories
+
+- **`elliptic@6.6.1`** — GHSA-848j-6mx2-7j84 (low severity, CWE-1240
+  "risky crypto primitive implementation"). Pulled in via
+  `@radiant-core/radiantjs@1.9.6` → `elliptic@^6.5.7`. Upstream
+  `@radiant-core/radiantjs` hasn't bumped the ceiling yet, so we can't
+  resolve to a patched version without forking. Impact assessment: the
+  Radiant-side signing this affects is P2SH-spend sighash (cancel,
+  claim, finalize). The Bitcoin-side signing (Taker payment) uses a
+  different path through `tiny-secp256k1` + `ecpair` and is unaffected.
+  Tracking — will update when upstream releases. Do not re-report.
+
 ## Disclosure
 
 We ask for 90 days to fix before public disclosure. If we haven't
