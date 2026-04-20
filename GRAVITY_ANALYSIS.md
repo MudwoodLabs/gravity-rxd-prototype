@@ -2,7 +2,7 @@
 
 **Date**: 2026-04-18
 **Source paper**: [`gravity.pdf`](https://github.com/Radiant-Core/Project-Gravity/blob/main/gravity.pdf) (also at [Radiant-Core/Project-Gravity](https://github.com/Radiant-Core/Project-Gravity))
-**Author/researcher notes**: Eric (FlipperHub / Radiant ecosystem)
+**Author/researcher notes**: Zyrtnin
 
 ---
 

@@ -129,7 +129,7 @@ For the mainnet demo, fresh covenants will be deployed — these are just refere
 - `contracts/maker_covenant_6x12.rxd` — state-separated full covenant
 - `contracts/maker_covenant_flat_6x12.rxd` — flat full covenant (current test target)
 
-**FlipperHub Radiant wallet on VPS** used for all Radiant-side operations:
+**Radiant wallet** used for all Radiant-side operations:
 - Connection: `ssh <your-radiant-node-ssh> 'sudo docker exec radiant-mainnet radiant-cli -datadir=/home/radiant/.radiant <cmd>'`
 - Balance as of last check: ~5,315 RXD (more than enough for any remaining tests)
 - Demo needs only ~0.5 RXD at a time
@@ -150,7 +150,7 @@ When ready to execute:
    - btcChainAnchor = from step 2
    - claimDeadline = 0
    - totalPhotonsInOutput = 1000000
-6. Fund the resulting P2SH with ~50M sats from FlipperHub wallet
+6. Fund the resulting P2SH with ~50M sats from your Radiant wallet
 7. Taker (you, with any BTC wallet) sends 1000+ sats to the Maker BTC address — anywhere in the next 6 blocks (~1 hour)
 8. Wait 6 BTC confirmations
 9. Fetch SPV proof: `node relayer/src/cli.js fetch-spv-proof --txid <btc-payment-txid>`
