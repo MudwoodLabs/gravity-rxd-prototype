@@ -108,8 +108,19 @@ node /path/to/cashc/dist/main/cashc-cli.js contracts/maker_offer.rxd \
 # See validation/maker_offer_instantiated.js pattern.
 # Outputs MakerOffer P2SH address.
 
-# Fund the MakerOffer P2SH from Maker's Radiant wallet
-radiant-cli sendtoaddress <MakerOffer P2SH> <photons + fee margin>
+# Fund the MakerOffer P2SH from Maker's Radiant wallet.
+#
+# MINIMUM FUNDING for a 6×12 flat covenant (from 2026-04-20 shakedown):
+#   totalPhotonsInOutput (10M)      ← covenant's output floor
+# + ~51M photons for finalize fee   ← 5,084-byte tx @ 10k sat/byte min relay
+# + ~3M claim fee
+# = ~64M photons minimum.
+#
+# Use AT LEAST 0.65 RXD (65,000,000 photons). Below this, the claim
+# succeeds but finalize() is rejected at mempool with "min relay fee
+# not met" and the Maker's photons are stuck until claimDeadline forfeit.
+# Don't over-optimize: 1 RXD funding gives comfortable fee headroom.
+radiant-cli sendtoaddress <MakerOffer P2SH> <photons; ≥ 0.65 RXD>
 ```
 
 ### 5. Taker claims (creates MakerClaimed UTXO)
@@ -306,9 +317,13 @@ node src/cli.js broadcast --tx-hex $(cat finalize-tx.hex)
 
 | Side | Fee |
 |---|---|
-| Radiant: funding + claim + finalize | ~0.5 RXD (~fraction of a cent) |
+| Radiant: funding + claim + finalize (6×12 covenant) | ~0.55 RXD per trade (~$0.01) |
 | Bitcoin: Taker's payment tx | ~500 sats miner fee |
-| Total | ~ half a cent for a trade of any size |
+| Total | ~$0.02 total, per trade of any size |
+
+The Radiant number is dominated by the finalize fee: 5,084-byte tx at
+10k-sat/byte min-relay = ~51M photons. Fund the MakerOffer with **at
+least 0.65 RXD** or the finalize will be rejected at broadcast.
 
 Makes trade sizes below ~$1 BTC equivalent impractical. Above that, any
 size is economical.

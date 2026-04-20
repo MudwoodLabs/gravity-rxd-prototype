@@ -467,9 +467,16 @@ async function cmdBuildFinalizeTx() {
   }
   const spvProof = JSON.parse(spvProofRaw);
 
+  // redeem-hex may be a file path OR literal hex (mirrors build-claim-tx).
+  // If we treat a path as hex, `Buffer.from(path, 'hex')` silently drops
+  // non-hex chars, producing a tiny garbage buffer and a broken finalize tx.
+  const redeemHex = fs.existsSync(args['redeem-hex'])
+    ? fs.readFileSync(args['redeem-hex'], 'utf-8').trim()
+    : args['redeem-hex'];
+
   const result = buildFinalizeTx({
     spvProof,
-    redeemHex: args['redeem-hex'],
+    redeemHex,
     fundingTxid: args['funding-txid'],
     fundingVout: requireInt(args['funding-vout'], 'funding-vout', { max: 0xffffffff }),
     fundingAmount: requireInt(args['funding-amount'], 'funding-amount', { min: 1 }),

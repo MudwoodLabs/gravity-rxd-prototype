@@ -140,7 +140,7 @@ to avoid the Phase-3-era drift problem.
 **Radiant wallet** used for all Radiant-side operations:
 - Connection: `ssh <your-radiant-node-ssh> 'sudo docker exec radiant-mainnet radiant-cli -datadir=/home/radiant/.radiant <cmd>'`
 - Balance as of last check: ~5,315 RXD (more than enough for any remaining tests)
-- Demo needs only ~0.5 RXD at a time
+- Demo needs **≥ 0.65 RXD** per MakerOffer (finalize tx is ~5,084 B at 10k-sat/byte min-relay = ~51M photon fee; claim+margin adds ~3M; covenant output floor adds 10M). Under-funded offers succeed at claim but reject finalize.
 
 ## The pending mainnet demo plan
 
