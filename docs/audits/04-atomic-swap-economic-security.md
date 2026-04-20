@@ -11,7 +11,7 @@ Bitcoin-side crypto, and secrets/deps are in separate reports.
 >
 > | # | Current status |
 > |---|----------------|
-> | S1 `claimDeadline` race | Mitigated at the tooling level only. See [`docs/S1_TIME_MODEL_LIMITATION.md`](../S1_TIME_MODEL_LIMITATION.md) for the full architectural explanation. Short version: RadiantScript has no "now" primitive at claim time, so the covenant cannot dynamically enforce "claimDeadline is in the future." The generator bakes a 30d-rear floor, the client-side deploy tool refuses `claimDeadline < now + 24h`, and the Taker is instructed to independently re-verify. Honest tooling + Taker re-verification closes the race; adversarial Maker + un-verifying Taker is still vulnerable. |
+> | S1 `claimDeadline` race | Mitigated at the tooling level only. See [`docs/S1_TIME_MODEL_LIMITATION.md`](../S1_TIME_MODEL_LIMITATION.md) for the full architectural explanation. Short version: RadiantScript has no "now" primitive at claim time, so the covenant cannot dynamically enforce "claimDeadline is in the future." The generator bakes a 30d-rear floor, the client-side deploy tool refuses `claimDeadline < now + 24h`, and TRADE_FLOW.md step 3 instructs (but does not cryptographically mandate) Taker-side re-verification. Honest tooling + Taker who performs the re-verify closes the race; adversarial Maker + un-verifying Taker is still vulnerable. |
 > | S3 claim() permissionless | **CLOSED** — `contracts/maker_offer.rxd` now requires `checkSig(takerSig, takerPk)` before state transition. |
 > | S4 single-Taker binding | Unchanged; architectural. |
 > | S5 reorg safety at N=6 | Unchanged. |

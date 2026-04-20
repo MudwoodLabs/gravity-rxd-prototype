@@ -33,7 +33,8 @@ jq -r .pkh_hex maker-btc-keys.json
 # e.g. 059b28dbed87544a64318659a65af135b95dbefa
 ```
 
-The `pkh_hex` goes into the MakerCovenant's `btcReceivePkh` parameter.
+The `pkh_hex` (or `p2tr.hash_hex` for taproot) goes into the MakerCovenant's
+`btcReceiveHash` parameter along with the chosen `--btc-type`.
 **The privkey stays with the Maker** — only they can spend the received BTC.
 
 ### 2. Taker provides a Radiant receive address
@@ -298,7 +299,7 @@ node src/cli.js broadcast --tx-hex $(cat finalize-tx.hex)
 
 ### Trade complete
 
-- **Maker** now has BTC at their `btcReceivePkh` (controlled by `maker-btc-keys.json`)
+- **Maker** now has BTC at their `btcReceiveHash` (controlled by `maker-btc-keys.json`)
 - **Taker** now has RXD at their Radiant address (from step 2)
 
 ## Typical costs

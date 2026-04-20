@@ -75,7 +75,7 @@ Layered defense:
    bypass that carries a loud social-eng warning. If the Maker uses our
    deploy tooling honestly, this closes S1 for them.
 
-3. **Taker-side re-verification (off-chain, required).**
+3. **Taker-side re-verification (off-chain, documented-as-required).**
    [`relayer/TRADE_FLOW.md`](../relayer/TRADE_FLOW.md) step 3 instructs
    the Taker to re-run `extract_p2sh_code_hash.js` independently with
    the Maker-advertised parameters and compare the resulting hash
@@ -146,9 +146,11 @@ timestamp or height. Covenants could then directly express
 soft-fork; entirely out of this prototype's scope.
 
 **Option C — accept the architectural limit.** Rely on honest tooling
-+ mandatory Taker re-verification. Where we are now. Fine for
-cooperative/OTC counter-parties; not fine for a public order book
-against unknown Makers.
++ documented-as-required Taker re-verification (soft-mandated; not
+cryptographically enforced — a Taker can skip it). Where we are now.
+Fine for cooperative/OTC counter-parties who already trust each other
+enough to agree on the operational procedure; **not fine** for a
+public order book against unknown Makers.
 
 ## Related
 
