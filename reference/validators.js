@@ -234,6 +234,19 @@ function verifyTxStructure(rawTxHex) {
     };
   }
 
+  // Sanity: the tx must contain enough bytes for outputCount + at least a
+  // minimum output at outputOffset. The smallest output the covenant
+  // accepts is P2WPKH/P2TR (31 bytes); we enforce at least that much plus
+  // the 4-byte locktime tail to avoid returning pass on truncated data.
+  const MIN_TAIL = 31 + 4;
+  if (rawTx.length < outputOffset + MIN_TAIL) {
+    return {
+      pass: false,
+      reason: `rawTx too short for output at offset ${outputOffset} ` +
+              `(need ≥ ${outputOffset + MIN_TAIL} bytes, got ${rawTx.length})`,
+    };
+  }
+
   const outputCount = rawTx[outputCountByte];
   if (outputCount === 0x00) return { pass: false, reason: 'outputCount must be >= 1' };
   if (outputCount >= 0xfd) return { pass: false, reason: `outputCount varint not 1-byte (got 0x${outputCount.toString(16)})` };

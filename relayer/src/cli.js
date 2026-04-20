@@ -43,6 +43,28 @@ function parseArgs() {
   return args;
 }
 
+// Parse a CLI-string int and exit with a clear error on junk. Native
+// `Number(...)` silently returns NaN for 'abc', which then poisons
+// downstream arithmetic (NaN < 0 is false, NaN + x is NaN, etc.) and
+// yields opaque errors at the end of the pipeline. Use this at every
+// int-coercion boundary.
+function requireInt(val, name, opts = {}) {
+  const { min = 0, max = Number.MAX_SAFE_INTEGER } = opts;
+  if (val === undefined || val === null || val === '') {
+    console.error(`--${name} required`); process.exit(2);
+  }
+  const n = parseInt(val, 10);
+  if (!Number.isInteger(n) || !Number.isSafeInteger(n) || String(n) !== String(val).trim()) {
+    console.error(`--${name} must be a decimal integer (got ${JSON.stringify(val)})`);
+    process.exit(2);
+  }
+  if (n < min || n > max) {
+    console.error(`--${name} out of range [${min}, ${max}] (got ${n})`);
+    process.exit(2);
+  }
+  return n;
+}
+
 // Load a WIF privkey, preferring --privkey-file over --privkey-wif.
 // A file load accepts either a raw WIF (optionally with trailing newline) or
 // a JSON object like {"privkey_wif": "..."} (the shape emitted by btc-keygen
@@ -89,6 +111,10 @@ function loadPrivkey(args) {
         chunks.push(buf.slice(0, bytesRead).toString('utf-8'));
       }
       const raw = chunks.join('').trim();
+      if (!raw) {
+        console.error(`privkey file ${args['privkey-file']} is empty`);
+        process.exit(2);
+      }
       if (raw.startsWith('{')) {
         const obj = JSON.parse(raw);
         if (!obj.privkey_wif) {
@@ -135,6 +161,24 @@ async function cmdFetchSpvProof() {
     process.exit(1);
   }
   const txBlockHeight = meta.status.block_height;
+
+  // Minimum-confirmation gate (audit 05 F-14). Default 6 matches Bitcoin
+  // exchange deposit convention and the paper's recommended minimum.
+  // Explicit --min-confirmations 0 disables for testing.
+  const minConf = args['min-confirmations'] !== undefined
+    ? requireInt(args['min-confirmations'], 'min-confirmations', { max: 200 })
+    : 6;
+  if (minConf > 0) {
+    const tip = await btc.getTipHeight();
+    const confs = tip - txBlockHeight + 1;
+    if (confs < minConf) {
+      console.error(
+        `tx has ${confs} confirmations; need >= ${minConf}. ` +
+        `Wait or pass --min-confirmations <lower>.`
+      );
+      process.exit(1);
+    }
+  }
 
   // Anchor alignment (audit 05 F-3): the covenant requires
   // h1.prevHash == btcChainAnchor, so h1 must be block anchor+1. If the
@@ -433,10 +477,10 @@ async function cmdBuildFinalizeTx() {
     spvProof,
     redeemHex: args['redeem-hex'],
     fundingTxid: args['funding-txid'],
-    fundingVout: Number(args['funding-vout']),
-    fundingAmount: Number(args['funding-amount']),
+    fundingVout: requireInt(args['funding-vout'], 'funding-vout', { max: 0xffffffff }),
+    fundingAmount: requireInt(args['funding-amount'], 'funding-amount', { min: 1 }),
     toAddress: args['to-address'],
-    feeSats: Number(args['fee-sats']),
+    feeSats: requireInt(args['fee-sats'], 'fee-sats', { min: 0 }),
     // Optional independent re-checks (see finalize_tx.js): if provided, the
     // builder refuses to emit a tx that doesn't satisfy the covenant's
     // payment / nBits / anchor requirements.
@@ -445,7 +489,9 @@ async function cmdBuildFinalizeTx() {
     anchorHash: args['anchor-hash'],
     btcReceiveHash: args['btc-receive-hash'],
     btcReceiveType: args['btc-receive-type'],
-    btcSatoshis: args['btc-satoshis'] !== undefined ? Number(args['btc-satoshis']) : undefined,
+    btcSatoshis: args['btc-satoshis'] !== undefined
+      ? requireInt(args['btc-satoshis'], 'btc-satoshis', { min: 0 })
+      : undefined,
   });
 
   console.log(`=== finalize() spending tx ===`);
@@ -487,10 +533,10 @@ async function cmdBuildClaimTx() {
   const result = buildClaimTx({
     offerRedeemHex: readHex(args['offer-redeem-hex']),
     offerFundingTxid: args['offer-funding-txid'],
-    offerFundingVout: Number(args['offer-funding-vout']),
-    offerFundingAmount: Number(args['offer-funding-amount']),
+    offerFundingVout: requireInt(args['offer-funding-vout'], 'offer-funding-vout', { max: 0xffffffff }),
+    offerFundingAmount: requireInt(args['offer-funding-amount'], 'offer-funding-amount', { min: 1 }),
     claimedRedeemHex: readHex(args['claimed-redeem-hex']),
-    feeSats: Number(args['fee-sats']),
+    feeSats: requireInt(args['fee-sats'], 'fee-sats', { min: 0 }),
     takerPrivkeyWif,
     // Optional: if provided, the builder will re-hash the claimed redeem
     // script and assert it matches the 32-byte expected code hash before
@@ -671,17 +717,37 @@ async function cmdBtcBuildPayment() {
   }
   const inputs = [{
     txid: args['utxo-txid'],
-    vout: Number(args['utxo-vout']),
-    value: Number(args['utxo-amount']),
+    vout: requireInt(args['utxo-vout'], 'utxo-vout', { max: 0xffffffff }),
+    value: requireInt(args['utxo-amount'], 'utxo-amount', { min: 1 }),
   }];
+
+  // Cross-check the UTXO's actual scriptPubKey type against the user's
+  // claimed --input-type. A mismatch signs successfully but fails at
+  // consensus, wasting time. Skip with --skip-utxo-typecheck true for
+  // offline / testing workflows.
+  if (args['skip-utxo-typecheck'] !== 'true' && args['skip-utxo-typecheck'] !== true) {
+    const wanted = args['input-type'] || 'p2wpkh';
+    const actual = await btc.getUtxoScriptType(inputs[0].txid, inputs[0].vout);
+    const expectedFor = { 'p2wpkh': ['v0_p2wpkh'], 'p2sh-p2wpkh': ['p2sh'] };
+    const accepted = expectedFor[wanted] || [];
+    if (!accepted.includes(actual)) {
+      console.error(
+        `UTXO ${inputs[0].txid}:${inputs[0].vout} has scriptPubKey type ` +
+        `'${actual}', but --input-type=${wanted} expects one of ` +
+        `${accepted.join(' or ')}. Either use a matching UTXO or pass ` +
+        `--skip-utxo-typecheck true if you know what you're doing.`
+      );
+      process.exit(2);
+    }
+  }
 
   const result = btcWallet.buildSignedPaymentTx({
     privkeyWif,
     inputs,
     toType: args['to-type'],
     toHashHex: args['to-hash'],
-    amountSats: Number(args['amount-sats']),
-    feeSats: Number(args['fee-sats']),
+    amountSats: requireInt(args['amount-sats'], 'amount-sats', { min: 1 }),
+    feeSats: requireInt(args['fee-sats'], 'fee-sats', { min: 0 }),
     changeAddress: args['change-address'],
     // Shape of the Taker's funding UTXO. 'p2wpkh' (default, bc1q…) or
     // 'p2sh-p2wpkh' (3… wrapped segwit). Covenant accepts both post-Phase-5.

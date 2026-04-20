@@ -100,11 +100,32 @@ function main() {
     'MakerCovenantFlat6x12': 'pre-Phase-4 covenant — no nBits bound, no structural constraint. Regenerate.',
     'VerifyPayment': 'standalone primitive, not a deployable covenant',
   };
-  if (BANNED[artifact.contract]) {
+  // Second layer: a SHA-256 of each legacy .rxd's compiled-with-placeholders
+  // bytecode. Catches renamed contracts that bypass the name-based check.
+  // These hashes are computed from the current contracts/legacy/*.rxd with
+  // the repo's rxdc build. If someone recompiles with a different rxdc, the
+  // hash will differ and this second layer won't fire — the name-based
+  // check is still the primary gate.
+  const BANNED_BYTECODE_SHA256 = {
+    '9f74b48de165cfc376a2af8da4754341587f22d7b3674429d63dba4f6379309e': 'maker_claimed_stub (no SPV check)',
+    'cba74986f7dd2288deb02541e285263d4237147fdd8f37644592131c26fdd769': 'maker_covenant_6x12 (pre-Phase-4, no nBits bound)',
+    '6f2f4121791daf4eff9a80545a995eaaebe894b6d05370968b606cd11fc190a8': 'maker_covenant_flat_6x12 (pre-Phase-4, no nBits bound)',
+    'a65fba4ed3b0e11ab7f5fb09e9a20f3cd1183edfcc3d49215ea3df8e996fbb61': 'maker_offer_simple (no Taker sig on claim — audit 04 S3)',
+    '6264437431d7335add9e111242b996e1db9cdcb0551d935b7313fb6395a46c61': 'verify_payment (standalone primitive, not deployable)',
+  };
+  const bytecodeSha = crypto.createHash('sha256')
+    .update(Buffer.from(artifact.hex || '', 'hex')).digest('hex');
+  const bytecodeMatch = BANNED_BYTECODE_SHA256[bytecodeSha];
+
+  if (BANNED[artifact.contract] || bytecodeMatch) {
     const bypass = process.argv.includes('--i-understand-legacy-artifact=true');
+    const reason = BANNED[artifact.contract] || bytecodeMatch;
+    const detector = BANNED[artifact.contract]
+      ? `artifact.contract = "${artifact.contract}"`
+      : `artifact bytecode sha256 = ${bytecodeSha}`;
     console.error(
-      `\nartifact.contract = "${artifact.contract}" is on the deny-list:\n` +
-      `  ${BANNED[artifact.contract]}\n\n` +
+      `\n${detector} is on the deny-list:\n` +
+      `  ${reason}\n\n` +
       (bypass
         ? `Proceeding per --i-understand-legacy-artifact=true.`
         : `Refusing to compute. For a real deployment, regenerate from\n` +

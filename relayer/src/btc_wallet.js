@@ -25,7 +25,17 @@ const ECPair = ECPairFactory(ecc);
 bitcoin.initEccLib(ecc);  // required for taproot (p2tr) operations
 const NETWORK = bitcoin.networks.bitcoin;
 
-const MEMPOOL_API = process.env.MEMPOOL_API || 'https://mempool.space/api';
+const MEMPOOL_API = (() => {
+  const u = process.env.MEMPOOL_API || 'https://mempool.space/api';
+  // Refuse overrides that aren't plain http(s). Prevents a misconfigured
+  // env var (file:/// paths, javascript: URLs, etc.) from becoming an
+  // exfil or crash vector. http:// is allowed because some operators
+  // self-host the mempool-compatible API on a trusted LAN.
+  if (!/^https?:\/\//.test(u)) {
+    throw new Error(`MEMPOOL_API must begin with http:// or https:// (got ${JSON.stringify(u)})`);
+  }
+  return u;
+})();
 
 /**
  * Generate a fresh Bitcoin keypair and return addresses in all 4 formats
@@ -105,7 +115,14 @@ function generateKeypair() {
 }
 
 async function getUtxos(address) {
-  const res = await fetch(`${MEMPOOL_API}/address/${address}/utxo`);
+  // Restrict to Bitcoin address charset + the bech32/bech32m separator '1'.
+  // This covers P2PKH (Base58Check, 1...), P2SH (3...), P2WPKH/P2WSH (bc1q...),
+  // P2TR (bc1p...). Rejects anything containing /, ?, #, %, etc. that could
+  // pivot the URL path or inject query strings.
+  if (typeof address !== 'string' || !/^(1|3|bc1)[a-zA-HJ-NP-Z0-9]{20,99}$/.test(address)) {
+    throw new Error(`address is not a recognized mainnet format: ${JSON.stringify(address)}`);
+  }
+  const res = await fetch(`${MEMPOOL_API}/address/${encodeURIComponent(address)}/utxo`);
   if (!res.ok) throw new Error(`GET /address/${address}/utxo → ${res.status}`);
   return res.json();
 }

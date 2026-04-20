@@ -13,7 +13,13 @@
  *   GET /tx/:txid                            → tx metadata incl status.block_height
  */
 
-const BASE = process.env.MEMPOOL_API || 'https://mempool.space/api';
+const BASE = (() => {
+  const u = process.env.MEMPOOL_API || 'https://mempool.space/api';
+  if (!/^https?:\/\//.test(u)) {
+    throw new Error(`MEMPOOL_API must begin with http:// or https:// (got ${JSON.stringify(u)})`);
+  }
+  return u;
+})();
 
 async function getText(path) {
   const res = await fetch(BASE + path);
@@ -80,6 +86,32 @@ async function getMerkleProof(txid) {
   return await getJSON(`/tx/${txid}/merkle-proof`);
 }
 
+/**
+ * Look up the scriptpubkey_type of a specific output. Returns one of
+ * mempool.space's type strings: 'v0_p2wpkh', 'v1_p2tr', 'p2sh', 'p2pkh',
+ * 'v0_p2wsh', 'op_return', 'unknown', etc. Used by btc-build-payment to
+ * cross-check that the caller's --input-type matches the actual UTXO
+ * shape before signing (otherwise the sign succeeds and the broadcast
+ * fails consensus, wasting the Taker's time).
+ */
+async function getUtxoScriptType(txid, vout) {
+  const tx = await getJSON(`/tx/${txid}`);
+  if (!tx || !Array.isArray(tx.vout) || vout < 0 || vout >= tx.vout.length) {
+    throw new Error(`tx ${txid} has no output[${vout}]`);
+  }
+  return tx.vout[vout].scriptpubkey_type || 'unknown';
+}
+
+/** Current Bitcoin tip height, for confirmation-count gating. */
+async function getTipHeight() {
+  const h = await getText('/blocks/tip/height');
+  const n = parseInt(h, 10);
+  if (!Number.isInteger(n) || n < 0) {
+    throw new Error(`unexpected tip-height response: ${JSON.stringify(h)}`);
+  }
+  return n;
+}
+
 module.exports = {
   getBlockHashAtHeight,
   getHeaderHex,
@@ -87,4 +119,6 @@ module.exports = {
   getRawTx,
   getTxMeta,
   getMerkleProof,
+  getTipHeight,
+  getUtxoScriptType,
 };
