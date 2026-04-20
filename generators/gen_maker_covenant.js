@@ -237,6 +237,29 @@ lines.push(``);
 const includeTypeParam = btcTypeArg === 'all';
 const nameSuffix = btcTypeArg === 'all' ? '' : '_' + btcTypeArg;
 
+// Compute a claimDeadline floor that's meaningfully current. RadiantScript
+// has no on-chain access to "now" at claim time (tx.time = nLockTime, which
+// the Taker controls), so we can't enforce a future-deadline dynamically.
+// Instead the generator bakes a floor into the source at generation time:
+// "must be >= (generation time - 30 days)". A Maker who regenerates the
+// covenant today gets a floor that's 30 days old at worst, so claimDeadline
+// can't be set to a value that's years in the past — which was the flaw in
+// the original static 2025-01-01 constant (audit 04 finding S1).
+//
+// Operational: Makers must regenerate the covenant at least monthly. The
+// relayer's deployment tool (extract_p2sh_code_hash.js) also enforces
+// claimDeadline >= now + 24h as a client-side guard (belt-and-suspenders).
+const CLAIMDEADLINE_FLOOR = Math.floor(Date.now() / 1000) - 30 * 24 * 3600;
+const floorComment = [
+  `    // claimDeadline floor, baked at generator time (${new Date(CLAIMDEADLINE_FLOOR * 1000).toISOString()}).`,
+  `    // 0 (or any small value) would make forfeit() immediately spendable`,
+  `    // alongside finalize(), letting the Maker race-snipe the Taker's claim`,
+  `    // — see audit 04 finding S1. This is a static check against a`,
+  `    // generation-time constant; Makers must regenerate the covenant`,
+  `    // periodically (at least monthly) and set claimDeadline to a real`,
+  `    // future timestamp (recommended: now + 24h).`,
+];
+
 if (flat) {
   // Flat layout: all params as constructor args. Used for direct-fund
   // scenarios where the entire covenant instance (state + code) is fully
@@ -252,6 +275,11 @@ if (flat) {
   lines.push(`    int claimDeadline,`);
   lines.push(`    int totalPhotonsInOutput`);
   lines.push(`) {`);
+  // Flat path: enforce the claimDeadline floor in a top-level require
+  // (which is still reachable even though there's no stateSeparator).
+  floorComment.forEach(l => lines.push(l));
+  lines.push(`    require(claimDeadline >= ${CLAIMDEADLINE_FLOOR});`);
+  lines.push(``);
   lines.push(`    return {`);
 } else {
   // State-separated layout: code-section params (hashed into the bytecode
@@ -274,11 +302,8 @@ if (flat) {
   lines.push(`    // Grammar requires at least one statement before stateSeparator.`);
   lines.push(`    // Use trivially-true requires that reference both state params.`);
   lines.push(`    require(takerRadiantPkh.length == 20);`);
-  lines.push(`    // claimDeadline must be a real future timestamp. 0 (or any small`);
-  lines.push(`    // value) would make forfeit() immediately spendable alongside`);
-  lines.push(`    // finalize(), letting the Maker race-snipe the Taker's claim —`);
-  lines.push(`    // see audit 04 finding S1. Minimum: Unix 1735686400 = 2025-01-01.`);
-  lines.push(`    require(claimDeadline >= 1735686400);`);
+  floorComment.forEach(l => lines.push(l));
+  lines.push(`    require(claimDeadline >= ${CLAIMDEADLINE_FLOOR});`);
   lines.push(``);
   lines.push(`    stateSeparator;`);
   lines.push(``);
@@ -329,6 +354,11 @@ lines.push(indent([
   `require(rawTx.length > 64);`,
   `require(rawTx.split(4)[1].split(1)[0] == 0x01);`,
   `require(rawTx.split(41)[1].split(1)[0] == 0x00);`,
+  // outputCount must be in [0x01, 0xfc] so output[0] actually exists and
+  // sits at the hardcoded offset 47. The != comparisons catch multi-byte
+  // varints (>= 0xfd); the == 0x00 catch rejects 0-output txs (which would
+  // not exist in a consensus-valid block, but belt-and-braces).
+  `require(rawTx.split(46)[1].split(1)[0] != 0x00);`,
   `require(rawTx.split(46)[1].split(1)[0] != 0xfd);`,
   `require(rawTx.split(46)[1].split(1)[0] != 0xfe);`,
   `require(rawTx.split(46)[1].split(1)[0] != 0xff);`,

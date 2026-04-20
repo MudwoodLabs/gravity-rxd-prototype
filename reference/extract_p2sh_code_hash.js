@@ -94,6 +94,34 @@ function main() {
     params[a.slice(0, eq)] = a.slice(eq + 1);
   }
 
+  // S1 defense: refuse to compute a P2SH commitment with a claimDeadline
+  // that's not comfortably in the future. The covenant's own floor is a
+  // static generation-time constant which can go stale; this belt-and-
+  // suspenders client-side check catches the common footgun where a Maker
+  // (or an attacker crafting an offer for a specific target) supplies
+  // claimDeadline = 0 / past / near-present.
+  if (params.claimDeadline !== undefined) {
+    const cd = Number(params.claimDeadline);
+    const now = Math.floor(Date.now() / 1000);
+    const minFuture = now + 24 * 3600;
+    if (!Number.isFinite(cd)) {
+      console.error(`claimDeadline=${params.claimDeadline} is not a valid number`);
+      process.exit(2);
+    }
+    if (cd < minFuture) {
+      const short = minFuture - cd;
+      const bypassed = params['--i-understand-short-deadline'] === 'true';
+      console.error(
+        `claimDeadline=${cd} is less than 24h in the future (short by ${short}s). ` +
+        (bypassed
+          ? `proceeding anyway per --i-understand-short-deadline=true.`
+          : `Refusing to compute — the finalize/forfeit race would be open ` +
+            `almost immediately. Add --i-understand-short-deadline=true to bypass.`)
+      );
+      if (!bypassed) process.exit(2);
+    }
+  }
+
   const fullHex = substitute(artifact.hex, params, artifact.abi);
   const redeemScript = Buffer.from(fullHex, 'hex');
 

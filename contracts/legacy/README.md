@@ -20,6 +20,21 @@ Compared to the current `generators/gen_maker_covenant.js` output:
   `outputOffset` lets a crafted OP_RETURN pattern bypass the payment check
   (see audit 03 finding C2).
 
+## maker_claimed_stub.rxd
+
+Hand-written stub of the State-2 covenant used for early development. Its
+`finalize()` has NO SPV verification — it only routes output to
+`takerRadiantPkh`. Deploying this file would let ANY party spend the UTXO
+by producing a P2PKH output to takerRadiantPkh, total loss. Kept only as
+a reference implementation of the stateSeparator pattern.
+
+## maker_offer_simple.rxd
+
+An earlier MakerOffer variant that explicitly skips the Taker signature
+on `claim()` for testing purposes. Deploying it would reintroduce audit
+finding S3 (permissionless state advance, griefing vector). Use
+`contracts/maker_offer.rxd` instead, which requires a Taker signature.
+
 ## Authoritative source
 
 The current covenant source is **`generators/gen_maker_covenant.js`**.

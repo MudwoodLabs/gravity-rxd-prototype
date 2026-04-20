@@ -198,6 +198,7 @@ function verifyTxStructure(rawTxHex) {
   if (rawTx[4] !== 0x01) return { pass: false, reason: `inputCount must be 1 (got ${rawTx[4]})` };
   if (rawTx[41] !== 0x00) return { pass: false, reason: `scriptSig must be empty, ie segwit input (got len ${rawTx[41]})` };
   if (rawTx[46] >= 0xfd) return { pass: false, reason: `outputCount varint not 1-byte (got ${rawTx[46]})` };
+  if (rawTx[46] === 0x00) return { pass: false, reason: 'outputCount must be >= 1' };
   return { pass: true, outputOffset: 47 };
 }
 

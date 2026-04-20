@@ -50,6 +50,23 @@ function parseArgs() {
 // is set, because argv is visible to ps auxww and persists in shell history.
 function loadPrivkey(args) {
   if (args['privkey-file']) {
+    // Refuse to read a privkey file that's world/group-readable or owned by
+    // someone other than the current uid. Bypass with
+    // --i-understand-weak-file-perms true for test envs.
+    const st = fs.statSync(args['privkey-file']);
+    const weakPerms = (st.mode & 0o077) !== 0;
+    const wrongOwner = typeof process.getuid === 'function' && st.uid !== process.getuid();
+    const bypass = args['i-understand-weak-file-perms'] === 'true' ||
+                   args['i-understand-weak-file-perms'] === true;
+    if ((weakPerms || wrongOwner) && !bypass) {
+      console.error(
+        `privkey file ${args['privkey-file']} has unsafe permissions ` +
+        `(mode=${(st.mode & 0o777).toString(8)}, owner uid=${st.uid}). ` +
+        `Expected mode 0600 owned by current uid. ` +
+        `Fix with: chmod 600 ${args['privkey-file']}`
+      );
+      process.exit(2);
+    }
     const raw = fs.readFileSync(args['privkey-file'], 'utf-8').trim();
     if (raw.startsWith('{')) {
       const obj = JSON.parse(raw);
@@ -151,10 +168,18 @@ async function cmdFetchSpvProof() {
     };
   }
 
-  // Cross-check off-chain via the branch (starting from the known txid)
+  // Cross-check off-chain via the branch. The covenant's flexible Merkle
+  // anchor accepts the computed root matching ANY of the N headers'
+  // merkleRoot fields — the tx could legitimately have landed in h1..hN.
+  // Mirror that by trying each header until one matches.
   const computedRoot = proof.computeRoot(args.txid, branch);
-  const expectedRoot = proof.extractMerkleRoot(headers[0]);
-  const match = computedRoot.equals(expectedRoot);
+  const perHeaderRoots = headers.map((h, i) => ({
+    index: i,
+    expected: proof.extractMerkleRoot(h),
+  }));
+  const matchingHeader = perHeaderRoots.find(r => computedRoot.equals(r.expected));
+  const match = Boolean(matchingHeader);
+  const expectedRoot = matchingHeader ? matchingHeader.expected : perHeaderRoots[0].expected;
 
   // Sanity check: does hash256(raw_tx) == txid? Segwit/Taproot txs serialize
   // with witness data and their hash256 gives the wtxid, not the txid. The
@@ -197,8 +222,7 @@ async function cmdFetchSpvProof() {
   // Pre-submit reference-validator pass (audit 05 F-1). We run the same
   // algorithm the covenant runs, so the relayer catches broken proofs before
   // they waste Radiant fees. Each failure becomes a warning; the exit code
-  // still reflects the core Merkle-root + txid-hash invariants since those
-  // are what the caller historically relies on.
+  // reflects every invariant the covenant will check.
   const validation = {};
   const chainResult = validators.verifyChain(headers);
   validation.chain_pow_and_link = chainResult.allOk;
@@ -222,6 +246,49 @@ async function cmdFetchSpvProof() {
     }
   }
 
+  // expectedNBits check (covenant's CV-1 defense).
+  if (args['expected-nbits']) {
+    if (!/^[0-9a-fA-F]{8}$/.test(args['expected-nbits'])) {
+      console.error('--expected-nbits must be 8 hex chars (4 bytes LE)'); process.exit(2);
+    }
+    const nb = validators.verifyNBitsMatch(headers, args['expected-nbits']);
+    validation.nbits_match = nb.pass;
+    if (!nb.pass) {
+      warnings.push(`expectedNBits mismatch: ${nb.reason}`);
+    }
+  }
+
+  // Structural tx-layout check (covenant's CV-2 defense).
+  const structResult = validators.verifyTxStructure(rawTx);
+  validation.tx_structure = structResult.pass;
+  if (!structResult.pass) {
+    warnings.push(
+      `tx structure invalid: ${structResult.reason}. Covenant requires a ` +
+      `single-input segwit tx with Maker payment as output[0].`
+    );
+  }
+
+  // Payment identity check (covenant's payment branch).
+  if (args['btc-receive-hash'] && args['btc-satoshis'] && args['btc-receive-type']) {
+    if (!/^[0-9a-fA-F]+$/.test(args['btc-receive-hash'])) {
+      console.error('--btc-receive-hash must be hex'); process.exit(2);
+    }
+    const sats = parseInt(args['btc-satoshis'], 10);
+    if (!Number.isInteger(sats) || sats < 0) {
+      console.error('--btc-satoshis must be a non-negative integer'); process.exit(2);
+    }
+    const type = args['btc-receive-type'];
+    if (!validators.PAYMENT_TYPES[type]) {
+      console.error(`--btc-receive-type must be one of: ${Object.keys(validators.PAYMENT_TYPES).join('|')}`); process.exit(2);
+    }
+    // outputOffset is 47 for the constrained 1-input segwit layout.
+    const pay = validators.verifyPayment(rawTx, 47, args['btc-receive-hash'], sats, type);
+    validation.payment = pay.pass;
+    if (!pay.pass) {
+      warnings.push(`payment check FAILED: ${pay.reason}`);
+    }
+  }
+
   const out = {
     txid: args.txid,
     tx_block_height: txBlockHeight,
@@ -238,19 +305,26 @@ async function cmdFetchSpvProof() {
     computed_root_LE: computedRoot.toString('hex'),
     expected_root_LE: expectedRoot.toString('hex'),
     merkle_root_matches: match,
+    merkle_root_matching_header: matchingHeader ? matchingHeader.index : null,
     raw_tx_hashes_to_txid: rawTxHashesToTxid,
     validation,
     warnings: warnings,
   };
 
   console.log(JSON.stringify(out, null, 2));
-  // Exit non-zero if any core invariant broke: Merkle root, hash→txid,
-  // chain PoW+link, or (when supplied) anchor match.
+  // Exit non-zero if any invariant the covenant will check has failed. Checks
+  // that are always run (core): Merkle root match, hash256(rawTx)==txid,
+  // chain PoW+link, tx structural layout. Checks run conditionally on CLI
+  // flags (anchor, nbits, payment): only count against the exit code if the
+  // flag was provided.
   const ok =
     match &&
     rawTxHashesToTxid &&
     validation.chain_pow_and_link &&
-    (validation.chain_anchor === undefined || validation.chain_anchor === true);
+    validation.tx_structure &&
+    (validation.chain_anchor === undefined || validation.chain_anchor === true) &&
+    (validation.nbits_match === undefined || validation.nbits_match === true) &&
+    (validation.payment === undefined || validation.payment === true);
   process.exit(ok ? 0 : 3);
 }
 
@@ -421,10 +495,31 @@ async function cmdBroadcast() {
   } else if (method === 'rpc') {
     // Plain JSON-RPC to a locally-reachable Radiant node. --rpc-url required.
     if (!args['rpc-url']) { console.error('--rpc-url required for --method rpc'); process.exit(2); }
+    const rpcUrl = args['rpc-url'];
+    // Guard against typo/exfil: must be http:// or https://. Accept http://
+    // only when the operator passes --allow-plaintext-rpc true (many Radiant
+    // nodes only listen on plain HTTP inside a trusted network).
+    if (!/^https?:\/\//.test(rpcUrl)) {
+      console.error(`--rpc-url must begin with http:// or https:// (got ${rpcUrl})`);
+      process.exit(2);
+    }
+    if (rpcUrl.startsWith('http://') &&
+        args['allow-plaintext-rpc'] !== 'true' && args['allow-plaintext-rpc'] !== true) {
+      console.error(
+        `--rpc-url is plain http:// and credentials/tx-hex would be sent in ` +
+        `the clear. Add --allow-plaintext-rpc true to confirm or use https://.`
+      );
+      process.exit(2);
+    }
+    // Also validate txHex as hex here (ssh path already does this; keep
+    // rpc path symmetric so malformed rawtx doesn't pollute the RPC node).
+    if (!/^[0-9a-fA-F]+$/.test(txHex) || txHex.length % 2 !== 0) {
+      console.error('tx hex must be even-length hex string'); process.exit(2);
+    }
     const body = JSON.stringify({
       jsonrpc: '1.0', id: 'gravity-relayer', method: 'sendrawtransaction', params: [txHex],
     });
-    const res = await fetch(args['rpc-url'], {
+    const res = await fetch(rpcUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body,
@@ -476,11 +571,16 @@ async function cmdBtcGetUtxos() {
 async function cmdBtcBuildPayment() {
   const args = parseArgs();
   const required = ['utxo-txid', 'utxo-vout', 'utxo-amount',
-                    'to-pkh', 'amount-sats', 'fee-sats'];
+                    'to-hash', 'to-type', 'amount-sats', 'fee-sats'];
   const missing = required.filter(k => !args[k]);
   if (missing.length) {
     console.error(`missing required args: ${missing.join(', ')}`);
-    console.error('Hint: multiple --utxo-* triples via JSON file with --utxos <file>');
+    console.error(
+      'Phase-3 covenant requires 1-input segwit (P2WPKH) Taker tx. ' +
+      'The Taker UTXO MUST be a P2WPKH output; --to-type chooses the ' +
+      'Maker destination format (p2pkh|p2wpkh|p2sh|p2tr). --to-hash is ' +
+      'the 20- or 32-byte hash the Maker committed as btcReceiveHash.'
+    );
     process.exit(2);
   }
 
@@ -489,38 +589,44 @@ async function cmdBtcBuildPayment() {
   // so only accept it when the user opts in explicitly.
   const privkeyWif = loadPrivkey(args);
 
-  // Support: --utxos <json-file> listing multiple UTXOs, or single via --utxo-*
-  let inputs;
+  // Covenant allows exactly 1 input — do not accept multi-UTXO bundles.
   if (args.utxos) {
-    inputs = JSON.parse(fs.readFileSync(args.utxos, 'utf-8'));
-  } else {
-    inputs = [{
-      txid: args['utxo-txid'],
-      vout: Number(args['utxo-vout']),
-      value: Number(args['utxo-amount']),
-    }];
+    console.error(
+      '--utxos is deprecated. Covenant requires a single P2WPKH input. ' +
+      'Consolidate your UTXOs into one P2WPKH output first, then use ' +
+      '--utxo-txid/--utxo-vout/--utxo-amount for that single UTXO.'
+    );
+    process.exit(2);
   }
+  const inputs = [{
+    txid: args['utxo-txid'],
+    vout: Number(args['utxo-vout']),
+    value: Number(args['utxo-amount']),
+  }];
 
   const result = btcWallet.buildSignedPaymentTx({
     privkeyWif,
     inputs,
-    toPkhHex: args['to-pkh'],
+    toType: args['to-type'],
+    toHashHex: args['to-hash'],
     amountSats: Number(args['amount-sats']),
     feeSats: Number(args['fee-sats']),
     changeAddress: args['change-address'],
   });
 
-  console.log('=== BTC payment tx ===');
-  console.log(`Inputs:       ${inputs.length}`);
-  console.log(`To pkh:       ${args['to-pkh']}`);
+  console.log('=== BTC payment tx (segwit-v0, single P2WPKH input) ===');
+  console.log(`Input type:   ${result.inputType}`);
+  console.log(`Sender addr:  ${result.senderAddress}`);
+  console.log(`Output type:  ${result.outputType}`);
+  console.log(`To hash:      ${args['to-hash']}`);
   console.log(`Amount:       ${args['amount-sats']} sats`);
   console.log(`Fee:          ${result.fee} sats`);
   console.log(`Change:       ${result.change} sats`);
   if (result.feeSwept) console.log(`(Dust ${result.feeSwept} sats swept to fee — below 546 dust threshold)`);
-  console.log(`Tx size:      ${result.size} bytes`);
+  console.log(`Tx size:      ${result.size} bytes (includes witness)`);
   console.log(`Outputs:      ${result.outputCount}`);
   console.log('');
-  console.log('Raw tx hex:');
+  console.log('Raw tx hex (broadcast this — includes witness):');
   console.log(result.txHex);
   console.log('');
   console.log(`Txid (BE): ${result.txId}`);

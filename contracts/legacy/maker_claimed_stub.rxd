@@ -35,8 +35,13 @@ contract MakerClaimed(
     // claimDeadline must be a real future timestamp. 0 (or any small value)
     // would make forfeit() immediately spendable alongside finalize(),
     // letting the Maker race-snipe the Taker's claim — see audit 04 finding
-    // S1. Minimum: Unix 1735686400 = 2025-01-01.
-    require(claimDeadline >= 1735686400);
+    // S1. This file is a hand-written STUB kept as a reference implementation
+    // of the stateSeparator pattern; for any real deployment use the code
+    // emitted by `generators/gen_maker_covenant.js`, which computes a
+    // generation-time-aware floor automatically. The literal constant here is
+    // kept rolling — update it periodically or stop relying on this file.
+    // Minimum: Unix 1759287600 = 2025-10-01 UTC.
+    require(claimDeadline >= 1759287600);
 
     stateSeparator;
 

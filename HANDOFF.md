@@ -119,15 +119,17 @@ npm install
 
 For the mainnet demo, fresh covenants will be deployed — these are just reference.
 
-**Generated contracts kept in the repo**:
-- `contracts/verify_header.rxd` — primitive
+**Contracts in the repo**:
+- `contracts/verify_header.rxd` — primitive (PoW single-header)
 - `contracts/verify_chain2.rxd` / `verify_chain6.rxd` — chain tests
 - `contracts/verify_merkle1.rxd` — Merkle primitive
-- `contracts/verify_payment.rxd` — payment primitive
-- `contracts/maker_cancel.rxd` / `maker_offer.rxd` / `maker_offer_simple.rxd` — offer variants
-- `contracts/maker_claimed.rxd` — state-separated claimed
-- `contracts/maker_covenant_6x12.rxd` — state-separated full covenant
-- `contracts/maker_covenant_flat_6x12.rxd` — flat full covenant (current test target)
+- `contracts/maker_cancel.rxd` / `maker_offer.rxd` — Maker-side offer covenant (v2, with Taker sig)
+- `contracts/legacy/` — stale/insecure variants kept as historical reference; DO NOT DEPLOY any file under this directory (see `contracts/legacy/README.md`)
+
+**Full Maker covenant** (6-header chain, 12-level Merkle, all the Phase 3+
+hardenings): regenerate per deployment from `generators/gen_maker_covenant.js`.
+It is the sole source of truth; no pre-compiled 6x12 `.rxd` is checked in,
+to avoid the Phase-3-era drift problem.
 
 **Radiant wallet** used for all Radiant-side operations:
 - Connection: `ssh <your-radiant-node-ssh> 'sudo docker exec radiant-mainnet radiant-cli -datadir=/home/radiant/.radiant <cmd>'`
@@ -138,29 +140,31 @@ For the mainnet demo, fresh covenants will be deployed — these are just refere
 
 When ready to execute:
 
-1. Query Bitcoin mainnet tip: `curl -s https://mempool.space/api/blocks/tip/height`
-2. Get that block's hash, reverse to LE → this is `btcChainAnchor`
-3. Generate Maker BTC keypair: `node relayer/src/cli.js btc-keygen`
-4. Generate (or reuse) a Taker Radiant address
-5. Instantiate `maker_covenant_flat_6x12` with:
-   - makerPkh = your Radiant pkh
+1. Query Bitcoin mainnet tip height + nBits: `curl -s https://mempool.space/api/blocks/tip/height` and the current block's `bits` field.
+2. Get the chosen anchor block's hash, reverse to LE → this is `btcChainAnchor`.
+3. Record the current `nBits` (as 4-byte LE hex) → this is `expectedNBits`.
+4. Generate Maker BTC keypair: `node relayer/src/cli.js btc-keygen --out maker-btc-keys.json`.
+5. Obtain Taker's Radiant address (from Taker, off-chain).
+6. Regenerate the current covenant: `node generators/gen_maker_covenant.js 6 12 --flat --btc-type p2wpkh > contracts/deploy.rxd`.
+7. Compile: `rxdc contracts/deploy.rxd -o validation/deploy.artifact.json`.
+8. Instantiate with:
+   - makerPkh = Maker Radiant pkh
    - takerRadiantPkh = Taker Radiant pkh
-   - btcReceiveHash + btcReceiveType = from btc-keygen, recommend P2WPKH (type 1)
-   - btcSatoshis = 1000 (tiny to bound risk)
+   - btcReceiveHash = Maker's btc pkh (P2WPKH recommended)
+   - btcSatoshis = agreed BTC price
    - btcChainAnchor = from step 2
-   - claimDeadline = 0
-   - totalPhotonsInOutput = 1000000
-6. Fund the resulting P2SH with ~50M sats from your Radiant wallet
-7. Taker (you, with any BTC wallet) sends 1000+ sats to the Maker BTC address — anywhere in the next 6 blocks (~1 hour)
-8. Wait 6 BTC confirmations
-9. Fetch SPV proof: `node relayer/src/cli.js fetch-spv-proof --txid <btc-payment-txid>`
-10. Locate P2PKH/P2WPKH output offset in the raw tx
-11. Build + broadcast finalize: `node relayer/src/cli.js build-finalize-tx ... | broadcast`
-12. Photons route to Taker Radiant address → trade complete
+   - expectedNBits = from step 3
+   - **claimDeadline = now + 24 hours** (or more; covenant floor auto-rolls forward at regeneration time)
+   - totalPhotonsInOutput = offered photons + bond
+9. Fund the resulting P2SH with `totalPhotonsInOutput + margin` from Maker's Radiant wallet.
+10. **Taker MUST use a single P2WPKH BTC UTXO** to fund their payment. The covenant rejects legacy and multi-input txs.
+11. Taker waits 6 BTC confirmations, then:
+    `node relayer/src/cli.js fetch-spv-proof --txid <btc-payment-txid> --anchor-height H --anchor-hash <anchor LE> --expected-nbits <nBits LE> --btc-receive-hash <Maker hash> --btc-receive-type p2wpkh --btc-satoshis <amount>`
+12. Build + broadcast finalize via the relayer. The covenant hardcodes output[0] as the payment location; `--output-offset` is gone.
 
 Full commands in `relayer/TRADE_FLOW.md`.
 
-**Failure recovery**: if finalize fails (wrong anchor, missed window, etc.), the Photons are recoverable via `forfeit()` which is always available (claimDeadline=0). Max loss: a few photons in fees.
+**Failure recovery**: `forfeit()` is only spendable once `nLockTime >= claimDeadline` and recovers photons to Maker. Taker's BTC is not recoverable if their payment doesn't meet the covenant constraints (wrong input type, 2+ inputs, output not at index 0) — instruct Takers carefully.
 
 ## Decision log — the important design choices
 

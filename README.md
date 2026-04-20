@@ -57,9 +57,11 @@ contracts/            RadiantScript (.rxd) source files
   verify_chain2.rxd   2-header chain (hand-written reference)
   verify_chain6.rxd   6-header chain (paper-recommended minimum)
   verify_merkle1.rxd  Single-level Merkle branch
-  verify_payment.rxd  BTC P2PKH output verification
+  maker_offer.rxd     Maker-side offer covenant (with Taker sig, v2)
+  maker_cancel.rxd    Maker cancel primitive
   verify_header.asm   Compiled ASM of verify_header.rxd
   probes/             Primitive-probe contracts used during exploration
+  legacy/             Stale / pre-hardening contracts — DO NOT DEPLOY
 
 generators/           Code generators for parameterized N
   gen_chain.js        Emits verify_chainN.rxd
