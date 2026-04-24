@@ -18,6 +18,23 @@ const N = parseInt(process.argv[2] || '2', 10);
 const M = parseInt(process.argv[3] || '4', 10);
 const flat = process.argv.includes('--flat');
 
+// Optional: --depths N,M,O,... accepts multiple merkle depths in one covenant.
+// When set, the merkle verification emits a ladder on branch.length, dispatching
+// to the matching depth's unrolled check. M (argv[3]) is then the *max* depth.
+let depthsArg = null;
+{
+  const idx = process.argv.indexOf('--depths');
+  if (idx >= 0 && idx + 1 < process.argv.length) {
+    depthsArg = process.argv[idx + 1].split(',').map(s => parseInt(s.trim(), 10)).sort((a, b) => a - b);
+    for (const d of depthsArg) {
+      if (!(d >= 1 && d <= 20)) {
+        console.error(`--depths value ${d} out of range [1,20]`);
+        process.exit(1);
+      }
+    }
+  }
+}
+
 // Optional: restrict to a single BTC output type for a smaller script.
 //   --btc-type p2pkh | p2wpkh | p2sh | p2tr | all   (default: all)
 let btcTypeArg = 'all';
@@ -112,26 +129,67 @@ function powBlock(i) {
 // (if h1 was hardcoded) to ~N × block_time (~1 hour for N=6, ~1 day for
 // N=144). Security is unchanged: attacker still must forge N mainnet-
 // difficulty blocks starting from the Maker's chosen anchor.
-function merkleBlock(M, N) {
+function merkleUnroll(depth, varSuffix = '') {
+  // Emit lines that walk a fixed `depth` levels starting from `current`.
+  // Uses fresh variable names via varSuffix so multiple unrolls can coexist.
+  //
+  // Sentinel support: direction byte 0x00 = sibling on right (hash current+sib),
+  // 0x01 = sibling on left (hash sib+current), 0x02 = padding no-op (current
+  // passes through unchanged). Callers pad shorter proofs to exactly `depth`
+  // levels by appending 0x02 + 32 zero bytes per unused level. This allows a
+  // single fixed-depth covenant to handle any real proof depth <= `depth`.
+  const lines = [];
+  for (let i = 0; i < depth; i++) {
+    const offsetExpr = i === 0 ? 'branch' : `branch.split(${i * 33})[1]`;
+    lines.push(
+      `// level ${i}`,
+      `bytes lvl${i}${varSuffix} = ${offsetExpr}.split(33)[0];`,
+      `bytes dir${i}${varSuffix} = lvl${i}${varSuffix}.split(1)[0];`,
+      `bytes sib${i}${varSuffix} = lvl${i}${varSuffix}.split(1)[1];`,
+      `if (dir${i}${varSuffix} == 0x00) {`,
+      `    current = hash256(current + sib${i}${varSuffix});`,
+      `} else if (dir${i}${varSuffix} == 0x01) {`,
+      `    current = hash256(sib${i}${varSuffix} + current);`,
+      `}`,
+      `// else: sentinel 0x02 — padding level, current passes through unchanged`,
+    );
+  }
+  return lines;
+}
+
+function merkleBlock(M, N, depthsList = null) {
   const lines = [
-    `// --- Merkle branch verification (depth ${M}) ---`,
+    `// --- Merkle branch verification ---`,
     `// Anchor: hash of rawTx must chain up to ONE OF h1..h${N}'s merkleRoot.`,
     `bytes32 current = hash256(rawTx);`,
   ];
-  for (let i = 0; i < M; i++) {
-    const offsetExpr = i === 0 ? 'branch' : `branch.split(${i * 33})[1]`;
-    lines.push(...[
-      `// level ${i}`,
-      `bytes lvl${i} = ${offsetExpr}.split(33)[0];`,
-      `bytes dir${i} = lvl${i}.split(1)[0];`,
-      `bytes sib${i} = lvl${i}.split(1)[1];`,
-      `if (dir${i} == 0x00) {`,
-      `    current = hash256(current + sib${i});`,
-      `} else {`,
-      `    current = hash256(sib${i} + current);`,
-      `}`,
-    ]);
+
+  if (depthsList && depthsList.length > 1) {
+    // Multi-depth ladder: dispatch on branch.length to the matching depth's unrolled check.
+    // Each branch entry is 33 bytes (1 direction + 32 sibling), so expected lengths are depth*33.
+    lines.push(`// Multi-depth dispatcher: branch.length determines which unrolled check runs.`);
+    lines.push(`int branchLen = branch.length;`);
+    for (let k = 0; k < depthsList.length; k++) {
+      const d = depthsList[k];
+      const expectedLen = d * 33;
+      const prefix = k === 0 ? 'if' : 'else if';
+      lines.push(`${prefix} (branchLen == ${expectedLen}) {`);
+      lines.push(`    // Depth ${d} (${expectedLen}-byte branch)`);
+      for (const l of merkleUnroll(d, `_d${d}`)) {
+        lines.push(`    ${l}`);
+      }
+      lines.push(`}`);
+    }
+    lines.push(`else {`);
+    lines.push(`    require(false);  // branch length doesn't match any supported depth`);
+    lines.push(`}`);
+  } else {
+    // Single-depth unroll (legacy behavior).
+    const d = (depthsList && depthsList[0]) || M;
+    lines.push(`// Fixed depth ${d}`);
+    lines.push(...merkleUnroll(d));
   }
+
   // Extract merkleRoot from each header (bytes [36..68]) and check current
   // matches any one of them.
   lines.push(`// Extract merkleRoot from each header`);
@@ -242,7 +300,7 @@ const lines = [];
 lines.push(`pragma radiantscript ^0.1.0;`);
 lines.push(``);
 lines.push(`// Gravity Maker covenant — State 2 (Claimed) with full SPV integration`);
-lines.push(`// Auto-generated: N=${N} headers, M=${M} Merkle depth`);
+lines.push(`// Auto-generated: N=${N} headers, M=${depthsArg ? depthsArg.join('/') : M} Merkle depth`);
 lines.push(`// Do not edit by hand; regenerate with gen_maker_covenant.js.`);
 lines.push(``);
 // When a single btc-type is chosen, we don't need the dispatch param.
@@ -271,7 +329,7 @@ if (flat) {
   // Flat layout: all params as constructor args. Used for direct-fund
   // scenarios where the entire covenant instance (state + code) is fully
   // determined at deploy time, with no MakerOffer binding flow.
-  lines.push(`contract MakerCovenantFlat${N}x${M}${nameSuffix}(`);
+  lines.push(`contract MakerCovenantFlat${N}x${depthsArg ? depthsArg.join('_') : M}${nameSuffix}(`);
   lines.push(`    bytes20 makerPkh,`);
   lines.push(`    bytes20 takerRadiantPkh,`);
   lines.push(`    bytes btcReceiveHash,`);
@@ -295,7 +353,7 @@ if (flat) {
   // (set at claim time by the Taker) go in the function() param list. The
   // generated contract's code-script hash is identical regardless of Taker
   // pkh or deadline, so MakerOffer can precommit to it.
-  lines.push(`contract MakerCovenant${N}x${M}${nameSuffix}(`);
+  lines.push(`contract MakerCovenant${N}x${depthsArg ? depthsArg.join('_') : M}${nameSuffix}(`);
   lines.push(`    bytes20 makerPkh,`);
   lines.push(`    bytes btcReceiveHash,`);
   if (includeTypeParam) lines.push(`    int btcReceiveType,`);
@@ -404,7 +462,7 @@ for (let i = 1; i <= N; i++) {
 }
 
 // Merkle proof
-lines.push(indent(merkleBlock(M, N)));
+lines.push(indent(merkleBlock(M, N, depthsArg)));
 lines.push('');
 
 // Payment check
