@@ -27,6 +27,7 @@
  * the covenant's state (takerRadiantPkh).
  */
 
+const crypto = require('crypto');
 const rxd = require('@radiant-core/radiantjs');
 const path = require('path');
 const validators = require(path.join(__dirname, '..', '..', 'reference', 'validators'));
@@ -52,9 +53,19 @@ function buildFinalizeTx(opts) {
   if (!spvProof.merkle_root_matches) {
     throw new Error('spv proof does not pass Merkle root check; refusing to build');
   }
-  if (!spvProof.raw_tx_hashes_to_txid) {
-    throw new Error('spv proof rawTx does not hash256 to its txid (segwit/taproot?); ' +
-                    'covenant will reject. Strip witness data first.');
+  // Recompute hash256(raw_tx) independently rather than trusting the flag in
+  // the JSON — a tampered proof file could set the flag true with fake data.
+  if (!/^[0-9a-fA-F]+$/.test(spvProof.raw_tx) || spvProof.raw_tx.length % 2 !== 0) {
+    throw new Error('spvProof.raw_tx is not valid hex');
+  }
+  const rawTxBuf = Buffer.from(spvProof.raw_tx, 'hex');
+  const hash256 = (buf) => crypto.createHash('sha256')
+    .update(crypto.createHash('sha256').update(buf).digest()).digest();
+  const computedHash = hash256(rawTxBuf);
+  const expectedTxid = Buffer.from(spvProof.txid, 'hex').reverse();
+  if (!computedHash.equals(expectedTxid)) {
+    throw new Error('spvProof.raw_tx does not hash256 to spvProof.txid (segwit/taproot?) — ' +
+                    'strip witness data first. Covenant will reject.');
   }
 
   // Structural check first — the covenant accepts native-segwit (scriptSig

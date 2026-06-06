@@ -35,12 +35,14 @@ async function getJSON(path) {
 
 /** Block hash at given height (BE hex, 64 chars) */
 async function getBlockHashAtHeight(height) {
-  return await getText(`/block-height/${height}`);
+  if (!Number.isInteger(height) || height < 0) throw new Error(`invalid height: ${height}`);
+  return await getText(`/block-height/${encodeURIComponent(height)}`);
 }
 
 /** 80-byte header as hex (little-endian fields as stored) */
 async function getHeaderHex(blockHash) {
-  const hex = await getText(`/block/${blockHash}/header`);
+  if (!/^[0-9a-fA-F]{64}$/.test(blockHash)) throw new Error(`invalid blockHash: ${blockHash}`);
+  const hex = await getText(`/block/${encodeURIComponent(blockHash)}/header`);
   if (hex.length !== 160) throw new Error(`expected 80-byte header, got ${hex.length / 2} bytes`);
   return hex;
 }
@@ -62,12 +64,14 @@ async function getHeaderChain(startHeight, count) {
 
 /** Raw transaction as hex. This is the NON-witness serialization (suitable for hash256 → txid). */
 async function getRawTx(txid) {
-  return await getText(`/tx/${txid}/hex`);
+  if (!/^[0-9a-fA-F]{64}$/.test(txid)) throw new Error(`invalid txid: ${txid}`);
+  return await getText(`/tx/${encodeURIComponent(txid)}/hex`);
 }
 
 /** Tx metadata: block_height, confirmations, etc. */
 async function getTxMeta(txid) {
-  return await getJSON(`/tx/${txid}`);
+  if (!/^[0-9a-fA-F]{64}$/.test(txid)) throw new Error(`invalid txid: ${txid}`);
+  return await getJSON(`/tx/${encodeURIComponent(txid)}`);
 }
 
 /**
@@ -83,7 +87,8 @@ async function getTxMeta(txid) {
  * whether the sibling at level `i` is on the right (0) or left (1).
  */
 async function getMerkleProof(txid) {
-  return await getJSON(`/tx/${txid}/merkle-proof`);
+  if (!/^[0-9a-fA-F]{64}$/.test(txid)) throw new Error(`invalid txid: ${txid}`);
+  return await getJSON(`/tx/${encodeURIComponent(txid)}/merkle-proof`);
 }
 
 /**
@@ -95,7 +100,8 @@ async function getMerkleProof(txid) {
  * fails consensus, wasting the Taker's time).
  */
 async function getUtxoScriptType(txid, vout) {
-  const tx = await getJSON(`/tx/${txid}`);
+  if (!/^[0-9a-fA-F]{64}$/.test(txid)) throw new Error(`invalid txid: ${txid}`);
+  const tx = await getJSON(`/tx/${encodeURIComponent(txid)}`);
   if (!tx || !Array.isArray(tx.vout) || vout < 0 || vout >= tx.vout.length) {
     throw new Error(`tx ${txid} has no output[${vout}]`);
   }

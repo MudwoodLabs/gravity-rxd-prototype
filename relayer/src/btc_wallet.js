@@ -44,8 +44,20 @@ const MEMPOOL_API = (() => {
  * Maker chooses which format they want to use as `btcReceiveHash` +
  * `btcReceiveType` based on wallet / ecosystem preference.
  */
+// secp256k1 curve order — private keys must be in [1, ORDER-1]
+const SECP256K1_ORDER = Buffer.from(
+  'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141', 'hex'
+);
+
 function generateKeypair() {
-  const keypair = ECPair.makeRandom({ network: NETWORK });
+  const keypair = ECPair.makeRandom({
+    network: NETWORK,
+    rng: (size) => crypto.randomBytes(size),
+  });
+  const privkeyBuf = Buffer.from(keypair.privateKey);
+  if (privkeyBuf.equals(Buffer.alloc(32)) || privkeyBuf.compare(SECP256K1_ORDER) >= 0) {
+    throw new Error('generated private key is out of valid secp256k1 range — retry');
+  }
   const pubkey = Buffer.from(keypair.publicKey);
 
   // RIPEMD160(SHA256(pubkey)) — 20 bytes. Used for P2PKH + P2WPKH.
@@ -137,7 +149,8 @@ async function getUtxos(address) {
 }
 
 async function getRawTxHex(txid) {
-  const res = await fetch(`${MEMPOOL_API}/tx/${txid}/hex`);
+  if (!/^[0-9a-fA-F]{64}$/.test(txid)) throw new Error(`invalid txid: ${txid}`);
+  const res = await fetch(`${MEMPOOL_API}/tx/${encodeURIComponent(txid)}/hex`);
   if (!res.ok) throw new Error(`GET /tx/${txid}/hex → ${res.status}`);
   return (await res.text()).trim();
 }
