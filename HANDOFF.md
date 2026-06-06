@@ -6,6 +6,15 @@ up where the work left off without re-reading the full development thread.
 
 ## Where to start
 
+> **⚠️ Direction update (2026-06):** the SPV-oracle **swap** covenant documented
+> below is **superseded for swaps** by an HTLC (hashlock + relative timelock),
+> which closes the audit-04 **S1** finalize/forfeit race structurally. The SPV
+> **verification primitives** (header-PoW, Merkle, payment verify) are retained
+> for no-counterparty uses (bridge-in, gated release, proof-of-payment). Read
+> [`docs/SPV_SWAP_SUPERSEDED_BY_HTLC.md`](./docs/SPV_SWAP_SUPERSEDED_BY_HTLC.md)
+> first — the state below is accurate as a record of the SPV-swap work, but the
+> swap direction has moved on.
+
 **On a fresh machine**: `git clone git@github.com:Zyrtnin-org/gravity-rxd-prototype.git`. Everything below is in this repo.
 
 **Read these, in order**:

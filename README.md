@@ -11,6 +11,27 @@
 > Safe for cooperative-OTC trades with independent Taker-side
 > verification; not safe for adversarial public deployment as-is.
 
+> 🧭 **Superseded for *swaps* — the deadline race was solved by switching to an
+> HTLC.** The finalize/forfeit race above (audit 04 S1) is *fundamental* to the
+> SPV-oracle **swap** design, not a tooling bug: the Taker's BTC payment is
+> irreversible, but the covenant cannot bind an upper-bound deadline on it
+> (RadiantScript's only time primitive, `tx.time`/CLTV, is a `>=` lower bound).
+> The fix is not deadline tuning — it is a different construction. A **hashlock +
+> relative-timelock (HTLC) atomic swap** binds both legs to one secret
+> `H = sha256(p)` (Radiant's `OP_SHA256` is Bitcoin-compatible, so no adaptor
+> signatures are needed for v1) and gives each side an `OP_CHECKSEQUENCEVERIFY`
+> refund path. The worst case becomes "both sides refund and walk away whole" —
+> never the one-sided loss S1 describes. See
+> [`docs/SPV_SWAP_SUPERSEDED_BY_HTLC.md`](./docs/SPV_SWAP_SUPERSEDED_BY_HTLC.md).
+>
+> **The SPV *primitives* in this repo are NOT deprecated.** Header-PoW,
+> Merkle-branch, and payment verification still answer a question an HTLC cannot:
+> *prove a Bitcoin fact to Radiant with no Bitcoin-side counterparty and no
+> Bitcoin-side script* — bridge-in / mint-against-deposit, gated release,
+> proof-of-payment. What the HTLC supersedes is the SPV-oracle **swap covenant**
+> (finalize/forfeit), which it strictly dominates; the verification machinery
+> below is retained and still sound.
+
 A working-code prototype of the [Gravity protocol](https://github.com/Radiant-Core/Project-Gravity) — peer-to-peer cross-chain exchange using SPV proofs and covenants on the [Radiant blockchain](https://www.radiantcore.org/).
 
 This repository contains RadiantScript contracts, code generators, and Node.js reference implementations for the core SPV verification primitives needed to implement pure-SPV Gravity without requiring any new Radiant consensus opcodes.
