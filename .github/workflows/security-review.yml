@@ -23,7 +23,7 @@ jobs:
       # CLAUDE_API_KEY secret is set) so the check doesn't fail red. Set the
       # CLAUDE_API_KEY repo/org secret to enable the actual review.
       - if: ${{ env.CLAUDE_API_KEY != '' }}
-        uses: anthropics/claude-code-security-review@main
+        uses: anthropics/claude-code-security-review@0c6a49f1fa56a1d472575da86a94dbc1edb78eda  # main @ 2026-02-11 (action has no tagged releases)
         with:
           comment-pr: true
           claude-api-key: ${{ env.CLAUDE_API_KEY }}
