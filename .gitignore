@@ -24,3 +24,11 @@ validation/*.artifact.json
 
 # relayer workspace
 relayer/node_modules/
+
+# Private key files — never commit mainnet keys
+*.wif
+*.key
+*.privkey
+*-keys.json
+taker-*.json
+maker-*.json

@@ -15,5 +15,9 @@
     "bitcoinjs-lib": "7.0.1",
     "ecpair": "3.0.1",
     "tiny-secp256k1": "2.2.4"
+  },
+  "devDependencies": {
+    "eslint": "^10.2.1",
+    "eslint-plugin-security": "^4.0.0"
   }
 }

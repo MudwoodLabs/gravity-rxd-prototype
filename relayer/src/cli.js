@@ -426,6 +426,9 @@ async function cmdFetchSpvProof() {
 async function cmdValidateProof() {
   const args = parseArgs();
   if (!args.txid) { console.error('--txid required'); process.exit(2); }
+  if (!/^[0-9a-fA-F]{64}$/.test(args.txid)) {
+    console.error('--txid must be exactly 64 hex chars'); process.exit(2);
+  }
 
   const meta = await btc.getTxMeta(args.txid);
   if (!meta.status || !meta.status.confirmed) {
@@ -460,8 +463,9 @@ async function cmdBuildFinalizeTx() {
 
   // spv-proof can be either a file path or literal JSON (for piping).
   let spvProofRaw;
-  if (fs.existsSync(args['spv-proof'])) {
-    spvProofRaw = fs.readFileSync(args['spv-proof'], 'utf-8');
+  const spvProofResolved = path.resolve(args['spv-proof']);
+  if (fs.existsSync(spvProofResolved)) {
+    spvProofRaw = fs.readFileSync(spvProofResolved, 'utf-8');
   } else {
     spvProofRaw = args['spv-proof'];
   }
@@ -470,8 +474,9 @@ async function cmdBuildFinalizeTx() {
   // redeem-hex may be a file path OR literal hex (mirrors build-claim-tx).
   // If we treat a path as hex, `Buffer.from(path, 'hex')` silently drops
   // non-hex chars, producing a tiny garbage buffer and a broken finalize tx.
-  const redeemHex = fs.existsSync(args['redeem-hex'])
-    ? fs.readFileSync(args['redeem-hex'], 'utf-8').trim()
+  const redeemHexResolved = path.resolve(args['redeem-hex']);
+  const redeemHex = fs.existsSync(redeemHexResolved)
+    ? fs.readFileSync(redeemHexResolved, 'utf-8').trim()
     : args['redeem-hex'];
 
   const result = buildFinalizeTx({
@@ -528,7 +533,8 @@ async function cmdBuildClaimTx() {
   // Allow --claimed-redeem-hex and --offer-redeem-hex to accept either literal
   // hex or a file path containing hex.
   function readHex(v) {
-    return fs.existsSync(v) ? fs.readFileSync(v, 'utf-8').trim() : v;
+    const resolved = path.resolve(v);
+    return fs.existsSync(resolved) ? fs.readFileSync(resolved, 'utf-8').trim() : v;
   }
 
   const result = buildClaimTx({
@@ -567,8 +573,9 @@ async function cmdBroadcast() {
     process.exit(2);
   }
   const method = args.method || 'ssh';  // default ssh to VPS container
-  const txHex = fs.existsSync(args['tx-hex'])
-    ? fs.readFileSync(args['tx-hex'], 'utf-8').trim()
+  const txHexResolved = path.resolve(args['tx-hex']);
+  const txHex = fs.existsSync(txHexResolved)
+    ? fs.readFileSync(txHexResolved, 'utf-8').trim()
     : args['tx-hex'];
 
   if (method === 'ssh') {
@@ -776,8 +783,9 @@ async function cmdBtcBuildPayment() {
 async function cmdBtcBroadcast() {
   const args = parseArgs();
   if (!args['tx-hex']) { console.error('--tx-hex required'); process.exit(2); }
-  const txHex = fs.existsSync(args['tx-hex'])
-    ? fs.readFileSync(args['tx-hex'], 'utf-8').trim()
+  const btcTxHexResolved = path.resolve(args['tx-hex']);
+  const txHex = fs.existsSync(btcTxHexResolved)
+    ? fs.readFileSync(btcTxHexResolved, 'utf-8').trim()
     : args['tx-hex'];
   const txid = await btcWallet.broadcastTx(txHex);
   console.log(txid);

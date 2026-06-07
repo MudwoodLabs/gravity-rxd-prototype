@@ -1,0 +1,29 @@
+name: Security Review
+
+on:
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  security-review:
+    name: Claude Security Review
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+        with:
+          fetch-depth: 0
+
+      # Skip gracefully when no API key is configured (forks, or before the
+      # CLAUDE_API_KEY secret is set) so the check doesn't fail red. Set the
+      # CLAUDE_API_KEY repo/org secret to enable the actual review.
+      - if: ${{ env.CLAUDE_API_KEY != '' }}
+        uses: anthropics/claude-code-security-review@main
+        with:
+          comment-pr: true
+          claude-api-key: ${{ env.CLAUDE_API_KEY }}
