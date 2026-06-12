@@ -21,7 +21,7 @@ verification as described there.
 Please **do not** open a public GitHub issue for security-sensitive findings.
 
 Use GitHub's private vulnerability reporting:
-<https://github.com/Zyrtnin-org/gravity-rxd-prototype/security/advisories/new>
+<https://github.com/MudwoodLabs/gravity-rxd-prototype/security/advisories/new>
 
 Expected response time: within 7 days for acknowledgement.
 
