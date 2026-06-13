@@ -1,0 +1,67 @@
+# Dependabot configuration for gravity-rxd-prototype.
+# Weekly updates for npm (relayer + validation) and GitHub Actions.
+
+version: 2
+
+updates:
+  # Relayer npm dependencies
+  - package-ecosystem: "npm"
+    directory: "/relayer"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    reviewers:
+      - "Zyrtnin"
+    assignees:
+      - "Zyrtnin"
+    labels:
+      - "dependencies"
+      - "automated"
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+      include: "scope"
+
+  # Validation npm dependencies
+  - package-ecosystem: "npm"
+    directory: "/validation"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    reviewers:
+      - "Zyrtnin"
+    assignees:
+      - "Zyrtnin"
+    labels:
+      - "dependencies"
+      - "automated"
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+      include: "scope"
+
+  # GitHub Actions used in workflows
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    reviewers:
+      - "Zyrtnin"
+    assignees:
+      - "Zyrtnin"
+    labels:
+      - "dependencies"
+      - "automated"
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
