@@ -5,6 +5,6 @@
   "description": "Scripts to validate Gravity covenants against Radiant mainnet by constructing real funding/spending transactions.",
   "type": "commonjs",
   "dependencies": {
-    "@radiant-core/radiantjs": "1.9.6"
+    "@radiant-core/radiantjs": "2.0.6"
   }
 }
